@@ -1,13 +1,4 @@
 # import libraries
-import numpy as np
-import pandas as pd
-import datetime
-import math
-import csv
-from datetime import datetime
-from datetime import timedelta
-import pandas_ta as ta
-import random
 
 import warnings
 from tqdm import tqdm
@@ -15,8 +6,8 @@ from tqdm import tqdm
 warnings.filterwarnings('ignore')
 
 # functions
-from functions.loading_data import load_data
-from functions.functions import add_indicators, get_week_indices, split_data_by_weeks
+from data.function.load_data import load_data
+from technical_analysys import add_indicators
 
 # code
 RSI_length = 10
