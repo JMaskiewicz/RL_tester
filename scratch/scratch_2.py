@@ -1,13 +1,6 @@
 # import libraries
 import numpy as np
 import pandas as pd
-import datetime
-import math
-import csv
-from datetime import datetime
-from datetime import timedelta
-import pandas_ta as ta
-import random
 
 import warnings
 from tqdm import tqdm
@@ -15,12 +8,14 @@ from tqdm import tqdm
 warnings.filterwarnings('ignore')
 
 # functions
-from functions.loading_data import load_data
-from functions.functions import add_indicators, get_week_indices, split_data_by_weeks
+from data.function.load_data import load_data
+from technical_analysys import add_indicators
 
 
-def backtest(df, strategy, starting_capital=10000, provision=0.0001, leverage=10,
-             currencies=['EURUSD', 'USDJPY', 'EURJPY'], **kwargs):
+# code
+
+def backtest_medium(df, strategy, starting_capital=10000, provision=0.0001, leverage=10,
+                    currencies=['EURUSD', 'USDJPY', 'EURJPY'], **kwargs):
     # Setup DataFrame
     current_index = df.index[0]
     df['Capital'] = 0
@@ -45,7 +40,6 @@ def backtest(df, strategy, starting_capital=10000, provision=0.0001, leverage=10
         capital_in_previous = df.loc[previous_index, ('Capital_in', currencies)]
         df.loc[current_index, 'Available_Capital'] = df.loc[previous_index, 'Capital'][0] - abs(
             capital_in_previous).sum()
-        avaible_capital = df.loc[current_index, 'Available_Capital']
 
         # Get new positions from strategy function
         new_positions = strategy(df, current_index, currencies, **kwargs)  # , avaible_capital
@@ -151,7 +145,7 @@ for currency in currencies:
 # Assuming you have your df ready
 df = df.dropna()
 df = df['2022-06-01':]
-result_df = backtest(df,
+result_df = backtest_medium(df,
                      simple_rsi_strategy,
                      starting_capital=10000,
                      provision=0.0001,
@@ -159,13 +153,8 @@ result_df = backtest(df,
                      currencies=['EURUSD', 'USDJPY', 'EURJPY'],
                      RSI_length=RSI_length)
 
-positions_df = pd.DataFrame(columns=['Currency',
-                                     'Position',
-                                     'Stop_Loss',
-                                     'Take_profit',
-                                     'Trailing_SL',
-                                     'Time_stop',
-                                     'Active'])
+
+
 # 3 trading back testings:
 # 1. simple -1 0 1
 # 2. different values of positions
