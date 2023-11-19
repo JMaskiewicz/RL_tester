@@ -10,13 +10,21 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 from data.function.load_data import load_data
 from technical_analysys.add_indicators import add_indicators, compute_volatility
 from backtest.backtest_functions.backtest import Strategy
+# import libraries
+import numpy as np
+import random
+from collections import deque
+from tensorflow.keras import models, layers, optimizers
+
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 from collections import deque
 import random
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import time
 
 from data.function.load_data import load_data
@@ -37,15 +45,10 @@ class DQNAgent:
         self.model = self.build_model().to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.action_space = np.arange(-100, 101, 25)
-        self.look_ahead = 10
 
     def build_model(self):
         model = nn.Sequential(
             nn.Linear(self.state_size, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -95,15 +98,6 @@ class DQNAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-    def calculate_discounted_reward(self, current_time, df_train):
-        discounted_reward = 0.0
-        for k in range(self.look_ahead):
-            if current_time + k + 1 >= len(df_train):
-                break
-            reward = np.log(df_train.iloc[current_time + k + 1]['Close']) - np.log(df_train.iloc[current_time + k]['Close'])
-            discounted_reward += (self.gamma ** k) * reward
-        return discounted_reward
-
     def load(self, name):
         self.model.load_state_dict(torch.load(name))
 
@@ -112,21 +106,20 @@ class DQNAgent:
 
 # Example usage
 currencies = ['EURUSD']
-#df = load_data_rar(currencies=currencies, timestamp_x='1D')
 df = load_data(currencies=currencies, timestamp_x='1D')
 df = df.dropna()
-start_date = '2020-06-01'
-split_date = '2021-01-01'
+start_date = '2021-01-01'
+split_date = '2022-01-01'
 df_train = df[start_date:split_date]
 #df_train = df_train[['Close']]
 
 df_test = df[split_date:]
 #df_test = df_test[['Close']]
 
-episodes = 2000
+episodes = 1
 action_size = len(np.arange(-100, 101, 25))
-batch_size = 64  # 32
-look_back = 20  # Number of previous observations to include
+batch_size = 32  # 32
+look_back = 10  # Number of previous observations to include
 state_size = 1 * look_back
 agent = DQNAgent(state_size, action_size)
 
@@ -142,7 +135,7 @@ for e in range(episodes):
         action = agent.act(state)
 
         next_state = df_train.iloc[t - look_back + 1:t + 1]['Close'].values.flatten().reshape(1, -1)
-        reward = agent.calculate_discounted_reward(t, df_train) * action
+        reward = (df_train.iloc[t + 1]['Close'] - df_train.iloc[t]['Close']) * action
         done = t == len(df_train) - 2
 
         agent.remember(state, action, reward, next_state, done)
@@ -160,14 +153,6 @@ for e in range(episodes):
     episode_durations.append(episode_duration)
     all_total_rewards.append(total_reward)
 
-# Assuming all_total_rewards is a list containing the total rewards of each episode
-plt.figure(figsize=(10, 6))  # Set the figure size
-plt.plot(all_total_rewards, marker='o', linestyle='-')  # Plot the rewards
-plt.title("Total Rewards per Episode")  # Title of the plot
-plt.xlabel("Episode")  # X-axis label
-plt.ylabel("Total Reward")  # Y-axis label
-plt.grid(True)  # Show grid
-plt.show()  # Display the plot
 
 class SimpleDQN(Strategy):
     def __init__(self, currencies, agent, look_back, leverage=1.0, provision=0.0001, starting_capital=10000):
@@ -190,7 +175,6 @@ class SimpleDQN(Strategy):
 
         return new_positions
 
-
 # Usage Example
 DQN_strategy = SimpleDQN(currencies, agent=agent, look_back=look_back, starting_capital=10000)
 df_test = DQN_strategy.backtest(df_test)
@@ -202,15 +186,4 @@ DQN_strategy.display_summary_as_table(df_test, extended_report=True)
 # Plotting
 from backtest.plots.plot import plot_financial_data
 
-plot_financial_data(df_test, DQN_strategy, currencies, volatility='garman_klass_volatility', n=20)
-
-# Usage Example
-DQN_strategy = SimpleDQN(currencies, agent=agent, look_back=look_back, starting_capital=10000)
-df_train = DQN_strategy.backtest(df_train)
-
-report_df_positions = DQN_strategy.generate_report(df_train)
-report = DQN_strategy.generate_extended_report()
-DQN_strategy.display_summary_as_table(df_train, extended_report=True)
-
-# Plotting
-plot_financial_data(df_train, DQN_strategy, currencies, volatility='garman_klass_volatility', n=20)
+plot_financial_data(df_test, DQN_strategy, currencies, volatility='garman_klass_volatility', n=200)

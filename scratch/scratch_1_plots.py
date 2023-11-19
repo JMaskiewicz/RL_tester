@@ -7,6 +7,9 @@ import warnings
 # Ignore all FutureWarnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+from data.function.load_data import load_data
+from technical_analysys.add_indicators import add_indicators, compute_volatility
+
 
 class Strategy:
     def __init__(self, currencies, leverage=1.0, provision=0.0001, starting_capital=10000):
@@ -61,8 +64,8 @@ class Strategy:
 
             new_positions = self.calculate_new_positions(df, current_index)
 
-            ordered_positions = [new_positions.get(currency, 0) for currency in self.currencies]
-            df.loc[current_index, ('Position_proposition', self.currencies)] = ordered_positions
+            ordered_positions = [new_positions.get(currency, 0) for currency in currencies]
+            df.loc[current_index, ('Position_proposition', currencies)] = ordered_positions
 
             new_positions_series = pd.Series(new_positions).reindex(capital_in_previous.index.get_level_values(1))
             required_capital_series = abs(new_positions_series + capital_in_previous)
@@ -292,7 +295,7 @@ class Strategy:
 
         return drawdown.min()
 
-    def generate_report(self, df):
+    def generate_report(self):
         # Set Pandas options and initialize the report
         pd.set_option('display.max_columns', None)
         pd.set_option('display.max_rows', None)
@@ -401,9 +404,9 @@ class Strategy:
         total_gain_percentage = (df_currency_log['PnL'] / abs(df_currency_log['Open_Price'])).mean()
         return total_gain_percentage * 100
 
-    def display_summary_as_table(self, df, extended_report=False):
+    def display_summary_as_table(self, extended_report=False):
         # The standard report is always generated first.
-        standard_report = self.generate_report(df)
+        standard_report = self.generate_report()
 
         # Prepare the DataFrame for the standard report.
         standard_rows_list = [{'Metric': key, 'Value': value} for key, value in standard_report.items()]
@@ -423,3 +426,163 @@ class Strategy:
 
         # Display the final table, which includes the standard report and, if applicable, the extended reports.
         print(df_summary.to_string(index=False))
+
+
+
+class SimpleRSIStrategy(Strategy):
+    def __init__(self, currencies, RSI_length, leverage=1.0, provision=0.0001, starting_capital=10000):
+        super().__init__(currencies, leverage, provision, starting_capital)
+        self.RSI_length = RSI_length
+        self.entry_prices = {}
+        self.open_positions = {}
+
+    def calculate_new_positions(self, df, current_index):
+        new_positions = {}
+        for currency in self.currencies:
+            rsi_value = df.loc[current_index, (f'{currency}_RSI_{self.RSI_length}', currency)]
+            current_price = df.loc[current_index, ('Close', currency)]
+            if rsi_value <= 30:
+                new_positions[currency] = (30 - round(rsi_value)) * 100
+            elif rsi_value >= 70:
+                new_positions[currency] = - round((rsi_value) - 70) * 100
+            else:
+                new_positions[currency] = 0  # No open position
+
+            if new_positions[currency] != 0:
+                self.entry_prices[currency] = {"Date": current_index, "Price": current_price}
+                self.open_positions[currency] = new_positions[currency]
+
+        return new_positions
+
+# Usage Example
+RSI_length = 21
+currencies = ['EURUSD', 'EURJPY', 'USDJPY']
+df = load_data(currencies=currencies, timestamp_x='4h')
+
+for currency in currencies:
+    df = add_indicators(df, currency=currency, RSI=RSI_length)
+
+df = df.dropna()
+df = df['2022-01-01':]
+
+rsi_strategy = SimpleRSIStrategy(currencies, RSI_length=RSI_length, starting_capital=10000)
+df = rsi_strategy.backtest(df)
+
+report_df_positions = rsi_strategy.generate_report()
+report = rsi_strategy.generate_extended_report()
+rsi_strategy.display_summary_as_table(extended_report=True)
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.io as pio
+
+from technical_analysys.add_indicators import add_indicators, compute_volatility
+
+
+def add_trace_based_on_data(fig, df, currency, currencies, row, col):
+    if all(col in df.columns for col in
+           [('Open', currency), ('High', currency), ('Low', currency), ('Close', currency)]):
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index,
+                open=df['Open', currency],
+                high=df['High', currency],
+                low=df['Low', currency],
+                close=df['Close', currency],
+                name=f'Candlestick {currency}',
+                visible=(currency == currencies[0])
+            ), row=row, col=col)
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df['Close', currency],
+                mode='lines',
+                name=f'Close {currency}',
+                visible=(currency == currencies[0])
+            ),
+            row=row, col=col
+        )
+
+
+def plot_financial_data(df, strategy, currencies, volatility='garman_klass_volatility', n=200):
+    pio.renderers.default = "browser"
+
+    for currency in currencies:
+        df['Volatility', currency] = compute_volatility(df, currency, method_func=volatility, n=n)
+
+    for currency in currencies:
+        df['Volume', currency] = 0
+
+    for currency in currencies:
+        df['Cumulative PnL', currency] = df['PnL', currency].cumsum()
+
+    df['Global PnL', ''] = sum([df['PnL', currency] for currency in currencies]).cumsum()
+
+    all_currencies = currencies + ['Global PnL']
+
+    fig = make_subplots(
+        rows=7,
+        cols=1,
+        vertical_spacing=0.05,
+        shared_xaxes=True,
+        subplot_titles=['' for _ in range(7)],
+        row_heights=[0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2]
+    )
+
+    for currency in currencies:
+        add_trace_based_on_data(fig, df, currency, currencies, 1, 1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Volatility', currency], mode='lines', name=f'Volatility {currency}', visible=(currency == currencies[0])), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Volume', currency], mode='lines', name=f'Volume {currency}', visible=(currency == currencies[0])), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Cumulative PnL', currency], mode='lines', name=f'PnL {currency}', visible=(currency == currencies[0])), row=5, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Capital_in', currency], mode='lines', name=f'Position Size {currency}', visible=(currency == currencies[0])), row=6, col=1)
+
+    fig.add_trace(go.Scatter(x=df.index, y=df['Global PnL', ''], mode='lines', name='Global PnL', visible=True), row=7, col=1)
+
+    for i, trace in enumerate(fig.data):
+        print(f"Trace {i}:")
+        print(trace)
+        print("------")
+
+    buttons_currency = []
+
+    for i, currency in enumerate(currencies):
+        visibility_list = [currency == all_currencies[j] for j in range(len(currencies)) for _ in range(5)]
+        visibility_list.append(True)
+        button = {
+            "label": currency,
+            "method": "update",
+            "args": [
+                {"visible": visibility_list},
+                {"title": f"Currency: {currency}"}
+            ]
+        }
+        buttons_currency.append(button)
+
+    fig.update_layout(
+        margin=dict(l=20, r=100, t=20, b=20),
+        updatemenus=[{
+            "buttons": buttons_currency,
+            "direction": "down",
+            "showactive": True,
+            "x": 1.02,
+            "xanchor": "left",
+            "y": 0.9,
+            "yanchor": "top"
+        }],
+        annotations=[
+            dict(text="Close", x=0, y=0.97, showarrow=False, xref="paper", yref="paper", xanchor="left",
+                 yanchor="middle", font=dict(size=14), xshift=-40, textangle=-90),
+            dict(text="Volatility", x=0, y=0.69, showarrow=False, xref="paper", yref="paper", xanchor="left",yanchor="middle", font=dict(size=14), xshift=-40, textangle=-90),
+            dict(text="Volume", x=0, y=0.52, showarrow=False, xref="paper", yref="paper", xanchor="left", yanchor="middle", font=dict(size=14), xshift=-40, textangle=-90),
+            dict(text="PnL", x=0, y=0.35, showarrow=False, xref="paper", yref="paper", xanchor="left", yanchor="middle",font=dict(size=14), xshift=-40, textangle=-90),
+            dict(text="Position Size", x=0, y=0.18, showarrow=False, xref="paper", yref="paper", xanchor="left",yanchor="middle", font=dict(size=14), xshift=-40, textangle=-90),
+            dict(text="Global PnL", x=0, y=0.01, showarrow=False, xref="paper", yref="paper", xanchor="left",yanchor="middle", font=dict(size=14), xshift=-40, textangle=-90)
+        ]
+    )
+
+    fig.show()
+
+
+plot_financial_data(df, rsi_strategy, currencies, volatility='garman_klass_volatility', n=200)
+
