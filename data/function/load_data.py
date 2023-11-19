@@ -4,12 +4,13 @@
 """
 
 # import libraries
-import numpy as np
 import pandas as pd
-from datetime import datetime
-from datetime import timedelta
 import os
 from tqdm import tqdm
+from pyunpack import Archive
+import patoolib
+import zipfile
+import rarfile
 
 data_folder = "./data"
 
@@ -39,3 +40,39 @@ def load_data(currencies, timestamp_x):
         dfs.append(df)
     df_all = pd.concat(dfs, axis=1)
     return df_all
+
+
+def unpack_all_rars_in_folder():
+    # Use os.path.abspath to get the absolute path of the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Construct the path to the data_sets folder relative to the script's location
+    data_folder = os.path.join(script_dir, '..', 'data_sets')
+
+    print(f"Data folder: {data_folder}")
+
+    # Check if the data folder exists
+    if not os.path.exists(data_folder):
+        print(f"Data folder not found: {data_folder}")
+        return
+
+    # Iterate over all files in the data folder
+    for filename in tqdm(os.listdir(data_folder)):
+        if filename.endswith('.rar'):
+            rar_file_path = os.path.join(data_folder, filename)
+            currency_name = os.path.splitext(filename)[0]  # Assuming the rar file name is the currency name
+            extracted_folder = os.path.join(data_folder, currency_name)
+
+            print(f"Processing {rar_file_path}")
+
+            # Ensure the extraction directory exists
+            if not os.path.exists(extracted_folder):
+                os.makedirs(extracted_folder)
+
+            # Extract rar file
+            try:
+                with rarfile.RarFile(rar_file_path, 'r') as rar_ref:
+                    rar_ref.extractall(extracted_folder)
+                print(f"Extracted {filename} to {extracted_folder}")
+            except Exception as e:
+                print(f"Error extracting {filename}: {e}")
