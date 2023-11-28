@@ -23,6 +23,7 @@ import random
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import time
 
 from data.function.load_data import load_data
 
@@ -116,13 +117,13 @@ class DQNAgent:
 currencies = ['EURUSD']
 df = load_data(currencies=currencies, timestamp_x='1D')
 df = df.dropna()
-start_date = '2005-01-01'
+start_date = '2010-01-01'
 split_date = '2020-01-01'
 df_train = df[start_date:split_date]
 df_test = df[split_date:]
 
 variables = ['Open', 'High', 'Low', 'Close']
-episodes = 1000
+episodes = 100
 action_size = len(np.arange(-1, 2, 1))
 look_back = 50  # Number of previous observations to include
 state_size = len(variables) * look_back
@@ -142,10 +143,14 @@ agent = DQNAgent(
     variables=variables
 )
 
+
 def train_agent(agent, df_train, episodes, look_back):
     total_rewards = []
     episode_durations = []
+
     for episode in range(episodes):
+        start_time = time.time()  # Start time of the episode
+
         state = get_state(df_train, look_back)
         total_reward = 0
         step = 0
@@ -160,14 +165,18 @@ def train_agent(agent, df_train, episodes, look_back):
                     break
 
             step += 1
+
+        end_time = time.time()  # End time of the episode
+        episode_time = end_time - start_time  # Calculate the duration
+
         total_rewards.append(total_reward)
         episode_durations.append(step)
-        if episode % 1 == 0:
-            print('episode: ', episode + 1)
-            print("current epsilon: ", agent.epsilon)
-            print(f"Episode {episode + 1}: Total Reward: {total_reward}, Duration: {step}")
-            print('----')
 
+        if episode % 10 == 0:  # Adjust the frequency of printing if needed
+            print('Episode: ', episode + 1)
+            print("Current Epsilon: ", agent.epsilon)
+            print(f"Episode {episode + 1}: Total Reward: {total_reward}, Duration: {step}, Time: {episode_time:.2f} seconds")
+            print('----')
 
     return total_rewards, episode_durations
 
