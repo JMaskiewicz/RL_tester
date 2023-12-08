@@ -3,16 +3,32 @@ import random
 import warnings
 from tqdm import tqdm
 
-from technical_analysys.indicators import RSI, EMA
+from technical_analysys.indicators import rsi, simple_moving_average, average_true_range, macd, stochastic_oscillator, parabolic_sar
 from technical_analysys.volatility_functions import close_to_close_volatility, parkinson_volatility, garman_klass_volatility, rogers_satchell_volatility
 
-def add_indicators(df, currency, **kwargs):
-    """Add specified indicators to the DataFrame for the provided currency."""
-    for indicator, length in kwargs.items():
-        if indicator == 'RSI':
-            df[f'{currency}_{indicator}_{length}', currency] = RSI(df['Close'][currency], length)
-        elif indicator == 'EMA':
-            df[f'{currency}_{indicator}_{length}', currency] = EMA(df['Close'][currency], length)
+def add_indicators(df, indicators):
+    for indicator in indicators:
+        mkf = indicator["mkf"]
+        length = indicator.get("length", 14)  # Default length
+        if mkf in df.columns.get_level_values(1):
+            if indicator["indicator"].startswith("RSI"):
+                df[(mkf, f'RSI_{length}')] = rsi(df, mkf, length)
+            elif indicator["indicator"].startswith("SMA"):
+                df[(mkf, f'SMA_{length}')] = simple_moving_average(df, mkf, length)
+            elif indicator["indicator"].startswith("ATR"):
+                df[(mkf, f'ATR_{length}')] = average_true_range(df, mkf, length)
+            elif indicator["indicator"].startswith("MACD"):
+                macd_line, signal_line = macd(df, mkf)
+                df[(mkf, 'MACD_Line')] = macd_line
+                df[(mkf, 'Signal_Line')] = signal_line
+            elif indicator["indicator"].startswith("Stochastic"):
+                k_percent, d_percent = stochastic_oscillator(df, mkf)
+                df[(mkf, 'K%')] = k_percent
+                df[(mkf, 'D%')] = d_percent
+            elif indicator["indicator"].startswith("ParabolicSAR"):
+                df[(mkf, 'Parabolic_SAR')] = parabolic_sar(df, mkf)
+        else:
+            print(f"Market {mkf} not found in DataFrame")
     return df
 
 

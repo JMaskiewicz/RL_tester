@@ -40,9 +40,10 @@ class DQNetwork(nn.Module):
         for units in architecture:
             layers.append(nn.Linear(state_dim, units))
             layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.3))
             state_dim = units
 
-        layers.append(nn.Dropout(0.1))
+        layers.append(nn.Dropout(0.3))
         layers.append(nn.Linear(architecture[-1], num_actions))
         self.model = nn.Sequential(*layers)
 
@@ -60,7 +61,8 @@ class DQNAgent:
         self.epsilon_exponential_decay = epsilon_exponential_decay
         self.batch_size = batch_size
 
-        self.device = torch.device("cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.network = DQNetwork(state_dim, num_actions, architecture).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
@@ -72,8 +74,8 @@ class DQNAgent:
         if np.random.rand() < self.epsilon:
             return np.random.randint(-1, 2)
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-        q_values = self.network(state).to(self.device)
-        action = np.argmax(q_values.detach().numpy()) - 1
+        q_values = self.network(state)
+        action = np.argmax(q_values.cpu().detach().numpy()) - 1
         return action
 
     def memorize_transition(self, s, a, r):
@@ -117,15 +119,16 @@ class DQNAgent:
 currencies = ['EURUSD']
 df = load_data(currencies=currencies, timestamp_x='1D')
 df = df.dropna()
-start_date = '2010-01-01'
+start_date = '2005-01-01'
 split_date = '2020-01-01'
 df_train = df[start_date:split_date]
 df_test = df[split_date:]
 
-variables = ['Open', 'High', 'Low', 'Close']
-episodes = 100
+
+variables = ['Close']
+episodes = 1100
 action_size = len(np.arange(-1, 2, 1))
-look_back = 50  # Number of previous observations to include
+look_back = 10  # Number of previous observations to include
 state_size = len(variables) * look_back
 
 agent = DQNAgent(
@@ -134,12 +137,12 @@ agent = DQNAgent(
     learning_rate=0.01,
     gamma=0.99,
     epsilon_start=1.0,
-    epsilon_end=0.25,
-    epsilon_decay_steps=100000,
+    epsilon_end=0.1,
+    epsilon_decay_steps=1000000,
     epsilon_exponential_decay=0.9999,
     replay_capacity=int(1e6),
     architecture=(512, 512, 512, 512),
-    batch_size=4096,
+    batch_size=2048,
     variables=variables
 )
 
@@ -170,7 +173,7 @@ def train_agent(agent, df_train, episodes, look_back):
         episode_time = end_time - start_time  # Calculate the duration
 
         total_rewards.append(total_reward)
-        episode_durations.append(step)
+        episode_durations.append(episode_time)
 
         if episode % 10 == 0:  # Adjust the frequency of printing if needed
             print('Episode: ', episode + 1)
@@ -240,6 +243,7 @@ def make_predictions_with_agent(agent, df, look_back, currency):
 
     return df
 
+
 predicted_df_train = make_predictions_with_agent(agent, df_train, look_back, currencies[0])
 predicted_df_test = make_predictions_with_agent(agent, df_test, look_back, currencies[0])
 
@@ -283,6 +287,7 @@ class SimpleDQN(Strategy):
                 new_positions[currency] = 0
 
         return new_positions
+
 
 # Usage Example
 DQN_strategy = SimpleDQN(currencies, agent=agent, look_back=look_back, starting_capital=10000)

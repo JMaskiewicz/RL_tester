@@ -7,9 +7,6 @@
 import pandas as pd
 import os
 from tqdm import tqdm
-from pyunpack import Archive
-import patoolib
-import zipfile
 import rarfile
 
 data_folder = "./data"

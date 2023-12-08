@@ -1,10 +1,6 @@
-import numpy as np
-import random
-import warnings
-from tqdm import tqdm
 import pandas as pd
 
-import pandas as pd
+from data.function.load_data import load_data
 
 def rsi(df, mkf, length=14):
     close_prices = df.xs(mkf, level='Currency', axis=1)['Close']
@@ -74,3 +70,43 @@ def parabolic_sar(df, mkf, af=0.02, af_max=0.2):
             af_value = min(af_value + af, af_max)
         sar.iloc[i] = sar.iloc[i - 1] + af_value * (ep.iloc[i - 1] - sar.iloc[i - 1])
     return sar
+
+def add_indicators(df, indicators):
+    for indicator in indicators:
+        mkf = indicator["mkf"]
+        length = indicator.get("length", 14)  # Default length
+        if mkf in df.columns.get_level_values(1):
+            if indicator["indicator"].startswith("RSI"):
+                df[(mkf, f'RSI_{length}')] = rsi(df, mkf, length)
+            elif indicator["indicator"].startswith("SMA"):
+                df[(mkf, f'SMA_{length}')] = simple_moving_average(df, mkf, length)
+            elif indicator["indicator"].startswith("ATR"):
+                df[(mkf, f'ATR_{length}')] = average_true_range(df, mkf, length)
+            elif indicator["indicator"].startswith("MACD"):
+                macd_line, signal_line = macd(df, mkf)
+                df[(mkf, 'MACD_Line')] = macd_line
+                df[(mkf, 'Signal_Line')] = signal_line
+            elif indicator["indicator"].startswith("Stochastic"):
+                k_percent, d_percent = stochastic_oscillator(df, mkf)
+                df[(mkf, 'K%')] = k_percent
+                df[(mkf, 'D%')] = d_percent
+            elif indicator["indicator"].startswith("ParabolicSAR"):
+                df[(mkf, 'Parabolic_SAR')] = parabolic_sar(df, mkf)
+        else:
+            print(f"Market {mkf} not found in DataFrame")
+    return df
+
+# Example usage
+df = load_data(["EURUSD", "USDJPY"], "1D")
+print(df.head())
+
+indicators = [
+    {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
+    {"indicator": "SMA", "mkf": "EURUSD", "length": 20},
+    {"indicator": "ATR", "mkf": "USDJPY", "length": 14},
+    {"indicator": "MACD", "mkf": "EURUSD"},
+    {"indicator": "Stochastic", "mkf": "USDJPY"},
+    {"indicator": "ParabolicSAR", "mkf": "EURUSD", "af": 0.03, "af_max": 0.2}
+]
+add_indicators(df, indicators)
+print(df.head())
