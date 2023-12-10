@@ -428,7 +428,7 @@ mini_batch_size = 128
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets, provision=provision)
 agent = PPO_Agent(n_actions=env.action_space.n, input_dims=env.calculate_input_dims(), batch_size=batch_size, n_epochs=epochs, mini_batch_size=mini_batch_size)
 
-num_episodes = 300
+num_episodes = 100
 
 total_rewards = []
 episode_durations = []

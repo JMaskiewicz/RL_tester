@@ -1,6 +1,5 @@
 """
-PPO agent version 4
-Adding scaling and more variables (other currencies etc) to the observation space
+the newest version of PPO agent
 
 """
 import numpy as np
@@ -122,7 +121,7 @@ class CriticNetwork(nn.Module):
 
 
 class PPO_Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20):
+    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -132,6 +131,7 @@ class PPO_Agent:
         self.gae_lambda = gae_lambda
         self.actor = ActorNetwork(n_actions, input_dims).to(self.device)
         self.critic = CriticNetwork(input_dims).to(self.device)
+        self.mini_batch_size = mini_batch_size
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha)
@@ -140,10 +140,10 @@ class PPO_Agent:
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
 
-
     def learn(self):
         for _ in range(self.n_epochs):
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
+            # Generating the data for the entire batch
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
 
             values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
             advantage = np.zeros(len(reward_arr), dtype=np.float32)
@@ -159,30 +159,37 @@ class PPO_Agent:
 
             advantage = torch.tensor(advantage, dtype=torch.float).to(self.device)
 
-            for batch in batches:
-                # Ensure each state in the batch is correctly reshaped
-                batch_states = np.array([state.reshape(-1) for state in state_arr[batch]])
-                states = torch.tensor(batch_states, dtype=torch.float).to(self.device)
+            # Creating mini-batches
+            num_samples = len(state_arr)
+            indices = np.arange(num_samples)
+            np.random.shuffle(indices)
+            for start_idx in range(0, num_samples, self.mini_batch_size):
+                # Extract indices for the mini-batch
+                minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
 
-                old_probs = torch.tensor(old_prob_arr[batch], dtype=torch.float).to(self.device)
-                actions = torch.tensor(action_arr[batch], dtype=torch.long).to(self.device)
+                # Extract data for the current mini-batch
+                batch_states = torch.tensor(state_arr[minibatch_indices], dtype=torch.float).to(self.device)
+                batch_actions = torch.tensor(action_arr[minibatch_indices], dtype=torch.long).to(self.device)
+                batch_old_probs = torch.tensor(old_prob_arr[minibatch_indices], dtype=torch.float).to(self.device)
+                batch_advantages = advantage[minibatch_indices]
+                batch_values = values[minibatch_indices]
 
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
 
                 # Actor Network Loss
-                probs = self.actor(states)
+                probs = self.actor(batch_states)
                 dist = torch.distributions.Categorical(probs)
-                new_probs = dist.log_prob(actions)
-                prob_ratio = torch.exp(new_probs - old_probs)
-                weighted_probs = advantage[batch] * prob_ratio
+                new_probs = dist.log_prob(batch_actions)
+                prob_ratio = torch.exp(new_probs - batch_old_probs)
+                weighted_probs = batch_advantages * prob_ratio
                 clipped_probs = torch.clamp(prob_ratio, 1 - self.policy_clip, 1 + self.policy_clip)
-                weighted_clipped_probs = clipped_probs * advantage[batch]
+                weighted_clipped_probs = clipped_probs * batch_advantages
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
 
                 # Critic Network Loss
-                critic_value = self.critic(states).squeeze()
-                returns = advantage[batch] + values[batch]
+                critic_value = self.critic(batch_states).squeeze()
+                returns = batch_advantages + batch_values
                 critic_loss = nn.functional.mse_loss(critic_value, returns)
 
                 # Gradient Calculation and Optimization Step
@@ -413,9 +420,12 @@ print('number of train samples: ', len(df_train))
 print('number of test samples: ', len(df_test))
 look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+batch_size = len(df_train) - look_back - 1
+epochs = 40
+mini_batch_size = 128
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets, provision=provision)
-agent = PPO_Agent(n_actions=env.action_space.n, input_dims=env.calculate_input_dims(), batch_size=len(df_train) - look_back - 1, n_epochs=20)
+agent = PPO_Agent(n_actions=env.action_space.n, input_dims=env.calculate_input_dims(), batch_size=batch_size, n_epochs=epochs, mini_batch_size=mini_batch_size)
 
 num_episodes = 100
 
@@ -488,7 +498,6 @@ for test_day in range(len(df_test) - test_env.look_back):
 df_test_with_predictions = df_test.copy()
 df_test_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
-print(df_test_with_predictions)
 
 # final prediction with probabilities
 test_env_probs = Trading_Environment_Basic(df_test_probs, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
@@ -520,7 +529,6 @@ for train_day in range(len(df_train) - train_env.look_back):
 df_train_with_predictions = df_train.copy()
 df_train_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
-print(df_train_with_predictions)
 
 train_env_probs = Trading_Environment_Basic(df_train_probs, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
 action_probabilities = []
@@ -536,5 +544,8 @@ probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_noth
 # Join with the original train DataFrame
 df_train_with_probabilities = df_train_probs.iloc[train_env_probs.look_back:].reset_index(drop=True)
 df_train_with_probabilities = pd.concat([df_train_with_probabilities, probabilities_df], axis=1)
+
+
+
 
 
