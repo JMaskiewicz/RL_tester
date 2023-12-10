@@ -15,15 +15,6 @@ from tqdm import tqdm
 from data.function.load_data import load_data
 from technical_analysys.add_indicators import add_indicators
 
-def scale_data(data):
-    min_val = np.min(data)
-    max_val = np.max(data)
-    return (data - min_val) / (max_val - min_val)
-
-def calculate_returns(self, data):
-    returns = np.diff(data) / data[:-1]
-    return np.append(returns, 0)
-
 
 class PPOMemory:
     def __init__(self, batch_size):
@@ -41,14 +32,14 @@ class PPOMemory:
         batch_start = np.arange(0, n_states, self.batch_size)
         indices = np.arange(n_states, dtype=np.int64)
         np.random.shuffle(indices)
-        batches = [indices[i:i+self.batch_size] for i in batch_start]
+        batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        return np.array(self.states),\
-            np.array(self.actions),\
-            np.array(self.probs),\
-            np.array(self.vals),\
-            np.array(self.rewards),\
-            np.array(self.dones),\
+        return np.array(self.states), \
+            np.array(self.actions), \
+            np.array(self.probs), \
+            np.array(self.vals), \
+            np.array(self.rewards), \
+            np.array(self.dones), \
             batches
 
     def store_memory(self, state, action, probs, vals, reward, done):
@@ -67,6 +58,7 @@ class PPOMemory:
         self.dones = []
         self.vals = []
 
+
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims):
         super(ActorNetwork, self).__init__()
@@ -84,6 +76,7 @@ class ActorNetwork(nn.Module):
         x = self.softmax(self.fc4(x))
         return x
 
+
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims):
         super(CriticNetwork, self).__init__()
@@ -100,6 +93,7 @@ class CriticNetwork(nn.Module):
         q = self.fc4(x)
         return q
 
+
 class Agent:
     def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0005, gae_lambda=0.95, policy_clip=0.2, batch_size=1024, n_epochs=10):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,14 +103,12 @@ class Agent:
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
         self.gae_lambda = gae_lambda
-
         self.actor = ActorNetwork(n_actions, input_dims).to(self.device)
         self.critic = CriticNetwork(input_dims).to(self.device)
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha)
         self.memory = PPOMemory(batch_size)
-
 
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -136,6 +128,7 @@ class Agent:
         value = self.critic(state)
 
         return action.item(), log_prob.item(), value.item()
+
 
     def learn(self):
         for _ in range(self.n_epochs):
@@ -199,25 +192,43 @@ class Agent:
             probs = self.actor(state)
         return probs.cpu().numpy()
 
+
 import gym
 from gym import spaces
 
+
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20):
+    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradble_markets='EURUSD'):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = 10000
         self.current_position = 0
+        self.variables = variables
+        self.current_positions = current_positions
+        self.tradable_markets = tradble_markets
 
         # Define action and observation space
         self.action_space = spaces.Discrete(3)  # -1, 0, 1
-        self.observation_space = spaces.Box(low=-np.inf,
-                                            high=np.inf,
-                                            shape=(look_back + 1,),  # +1 for current position
-                                            dtype=np.float32)
+        if self.current_positions:
+            self.observation_space = spaces.Box(low=-np.inf,
+                                                high=np.inf,
+                                                shape=(look_back + 1,),  # +1 for current position
+                                                dtype=np.float32)
+        else:
+            self.observation_space = spaces.Box(low=-np.inf,
+                                                high=np.inf,
+                                                shape=(look_back,),
+                                                dtype=np.float32)
 
         self.reset()
+
+    def calculate_input_dims(self):
+        num_variables = len(self.variables)  # Number of variables
+        input_dims = num_variables * self.look_back  # Variables times look_back
+        if self.current_positions:
+            input_dims += 1  # Add one more dimension for current position
+        return input_dims
 
     def reset(self, day=None):
         if day is not None:
@@ -232,18 +243,18 @@ class Trading_Environment_Basic(gym.Env):
     def _create_base_observation(self):
         start = max(self.current_step - self.look_back, 0)
         end = self.current_step
-        return self.df['Close'].iloc[start:end].values
+        return self.df[self.variables].iloc[start:end].values
 
     def _next_observation(self):
-        # Create the base observation here
         start = max(self.current_step - self.look_back, 0)
-        end = self.current_step
-        base_observation = self.df['Close'].iloc[start:end].values
+        end = self.current_step - 1
+        base_observation = self.df.loc[start:end, self.variables].values.flatten()
 
-        # Append the current position to the observation
-        observation_with_position = np.append(base_observation, self.current_position)
-
-        return observation_with_position
+        if self.current_positions:
+            observation_with_position = np.append(base_observation, self.current_position)
+            return observation_with_position
+        else:
+            return base_observation
 
     def step(self, action):
         # Existing action mapping
@@ -251,8 +262,8 @@ class Trading_Environment_Basic(gym.Env):
         mapped_action = action_mapping[action]
 
         # Calculate reward based on action
-        current_price = self.df['Close'].iloc[self.current_step]
-        next_price = self.df['Close'].iloc[self.current_step + 1]
+        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
+        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
         reward = 0
         if mapped_action == 1:  # Buying
@@ -285,9 +296,28 @@ class Trading_Environment_Basic(gym.Env):
 
         return self._next_observation(), reward, self.done, {}
 
-    # TODO
-    def render(self):
-        pass
+    def render(self, mode='human'):
+        if mode == 'human':
+            window_start = max(0, self.current_step - self.look_back)
+            window_end = self.current_step + 1
+            plt.figure(figsize=(10, 6))
+
+            # Plotting the price data
+            plt.plot(self.df[('Close', self.tradable_markets)].iloc[window_start:window_end], label='Close Price')
+
+            # Highlighting the current position: Buy (1), Sell (-1), Hold (0)
+            if self.current_position == 1:
+                plt.scatter(self.current_step, self.df[('Close', self.tradable_markets)].iloc[self.current_step],
+                            color='green', label='Buy')
+            elif self.current_position == -1:
+                plt.scatter(self.current_step, self.df[('Close', self.tradable_markets)].iloc[self.current_step],
+                            color='red', label='Sell')
+
+            plt.title('Trading Environment State')
+            plt.xlabel('Time Step')
+            plt.ylabel('Price')
+            plt.legend()
+            plt.show()
 
 
 # Example usage
@@ -302,22 +332,21 @@ indicators = [
 
 ]
 add_indicators(df, indicators)
-
+variables = [('RSI_14', 'EURUSD'), ('Close', 'USDJPY'), ('Close', 'EURUSD'), ('Close', 'EURJPY')]
 df = df.dropna()
 start_date = '2018-01-01'
 split_date = '2020-01-01'
+
+tradable_markets = 'EURUSD'
 df_train = df[start_date:split_date]
 df_test = df[split_date:]
 df_test_probs = df_test.copy()
 print('number of train samples: ', len(df_train))
 print('number of test samples: ', len(df_test))
 
-pd.set_option('display.max_columns', None)
-print(df_train.head())
-error
-env = Trading_Environment_Basic(df_train)
-n_actions = env.action_space.n
-agent = Agent(n_actions=n_actions, input_dims=env.observation_space.shape[0], batch_size=512)
+# Create the environment
+env = Trading_Environment_Basic(df_train, look_back=20, variables=variables, current_positions=True,tradble_markets=tradable_markets)
+agent = Agent(n_actions=env.action_space.n, input_dims=env.calculate_input_dims(), batch_size=512)
 
 num_episodes = 2  # Number of episodes for training
 
@@ -348,8 +377,8 @@ for episode in tqdm(range(num_episodes)):
         print(f"Episode {episode + 1}: Total Reward: {cumulative_reward}, Duration: {episode}, Time: {episode_time:.2f} seconds")
         print('----\n')
 
-
 import matplotlib.pyplot as plt
+
 # Plotting the results after all episodes
 plt.plot(total_rewards)
 plt.title('Total Reward Over Episodes')
@@ -357,10 +386,17 @@ plt.xlabel('Episode')
 plt.ylabel('Total Reward')
 plt.show()
 
+'''variables = [
+    {"variable": "RSI_14", "mkf": "EURUSD", 'edit': 'none'},
+    {"variable": "RSI_14", "mkf": "EURJPY", 'edit': 'none'},
+    {"variable": "Close", "mkf": "USDJPY", 'edit': 'standarisize'},
+    {"variable": "Close", "mkf": "EURUSD", 'edit': 'standarisize'},
+    {"variable": "Close", "mkf": "EURJPY", 'edit': 'standarisize'},
+]'''
 
 # final prediction
 predictions_df = pd.DataFrame(index=df_test.index, columns=['Predicted_Action'])
-test_env = Trading_Environment_Basic(df_test)
+test_env = Trading_Environment_Basic(df_test, look_back=20, variables=variables, current_positions=True,tradble_markets=tradable_markets)
 
 for test_day in range(len(df_test) - test_env.look_back):
     observation = test_env.reset(test_day)  # Reset environment to the specific day
@@ -371,12 +407,12 @@ for test_day in range(len(df_test) - test_env.look_back):
 
 # Merge with df_test
 df_test_with_predictions = df_test.copy()
-df_test_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']-1
+df_test_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
 print(df_test_with_predictions)
 
 # final prediction with probabilities
-test_env_probs = Trading_Environment_Basic(df_test_probs)
+test_env_probs = Trading_Environment_Basic(df_test_probs, look_back=20, variables=variables, current_positions=True,tradble_markets=tradable_markets)
 action_probabilities = []
 
 for test_day in range(len(df_test_probs) - test_env_probs.look_back):
@@ -393,7 +429,7 @@ df_test_with_probabilities = pd.concat([df_test_with_probabilities, probabilitie
 
 # final prediction with probabilities
 df_train_probs = df_train.copy()
-train_env_probs = Trading_Environment_Basic(df_train_probs)
+train_env_probs = Trading_Environment_Basic(df_train_probs, look_back=20, variables=variables, current_positions=True,tradble_markets=tradable_markets)
 action_probabilities = []
 
 for train_day in range(len(df_train_probs) - train_env_probs.look_back):
