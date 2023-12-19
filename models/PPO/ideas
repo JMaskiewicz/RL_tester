@@ -1,0 +1,9 @@
+Ideas for PPO to test
+1. sharpe ratio based on 1 week capital on lower time frame like 1 hour
+b) sharpe ratio based on 1 month capital on higher time frame like 1 day
+2. walk forward testing
+3. use of different reward functions like sharpe ratio, sortino ratio, calmar ratio, omega ratio, etc
+4. higher penalty for negative returns
+5. use of different activation functions like tanh, relu, etc
+6. use of different optimizers like adam, rmsprop, etc
+7. use of different loss functions like mse, mae, etc
