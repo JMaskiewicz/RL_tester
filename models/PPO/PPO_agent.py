@@ -11,16 +11,73 @@ import torch.optim as optim
 from tqdm import tqdm
 import random
 import math
+import gym
+from gym import spaces
 
 from data.function.load_data import load_data
+from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators
 from data.edit import normalize_data, standardize_data
+
+# TODO rework backtesting
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, current_positions, provision=0.0001, initial_balance=10000):
+    # Create a validation environment
+    validation_env = Trading_Environment_Basic(df, look_back, variables, current_positions, mkf)
+
+    # Generate Predictions
+    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+    for validation_observation in range(len(df) - validation_env.look_back):
+        observation = validation_env.reset(validation_observation)
+        action = agent.choose_best_action(observation)
+        predictions_df.iloc[validation_observation + validation_env.look_back] = action
+
+    # Merge with original DataFrame
+    df_with_predictions = df.copy()
+    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+
+    # Backtesting
+    balance = initial_balance
+    current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
+
+    for i in range(1, len(df_with_predictions)):
+        action = df_with_predictions['Predicted_Action'].iloc[i]
+        current_price = df_with_predictions[('Close', mkf)].iloc[i - 1]
+        next_price = df_with_predictions[('Close', mkf)].iloc[i]
+
+        # Calculate log return
+        log_return = math.log(next_price / current_price) if current_price != 0 else 0
+        reward = 0
+
+        if action == 1:  # Buying
+            reward = log_return
+        elif action == -1:  # Selling
+            reward = -log_return
+
+        # Calculate cost based on action and current position
+        if action != current_position:
+            if action == 0 or math.isnan(action):
+                provision_cost = 0
+            else:
+                provision_cost = math.log(1 - 2 * provision)
+        else:
+            provision_cost = 0
+        reward += provision_cost
+
+        # Update the balance
+        balance *= math.exp(reward)
+
+        # Update current position
+        current_position = action
+
+    return balance
+
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
+# TODO use deque instead of list
 class PPOMemory:
     def __init__(self, batch_size):
         self.states = []
@@ -64,64 +121,115 @@ class PPOMemory:
         self.vals = []
 
 
-
+# TODO rework network into transformer network
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, dropout_rate=0.25):
         super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(1024, 512)
-        self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc3 = nn.Linear(512, 256)
-        self.dropout3 = nn.Dropout(dropout_rate)
-        self.fc4 = nn.Linear(256, 128)
-        self.dropout4 = nn.Dropout(dropout_rate)
-        self.fc5 = nn.Linear(128, n_actions)
-        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.bn1 = nn.BatchNorm1d(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.bn2 = nn.BatchNorm1d(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.bn3 = nn.BatchNorm1d(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.bn4 = nn.BatchNorm1d(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.bn5 = nn.BatchNorm1d(128)
+        self.fc6 = nn.Linear(128, n_actions)
+        self.relu = nn.LeakyReLU()
+        self.dropout = nn.Dropout(dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, state):
-        x = self.relu(self.fc1(state))
-        x = self.dropout1(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout2(x)
-        x = self.relu(self.fc3(x))
-        x = self.dropout3(x)
-        x = self.relu(self.fc4(x))
-        x = self.dropout4(x)
-        x = self.softmax(self.fc5(x))
+        x = self.fc1(state)
+        if x.size(0) > 1:
+            x = self.bn1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc2(x)
+        if x.size(0) > 1:
+            x = self.bn2(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc3(x)
+        if x.size(0) > 1:
+            x = self.bn3(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc4(x)
+        if x.size(0) > 1:
+            x = self.bn4(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc5(x)
+        if x.size(0) > 1:
+            x = self.bn5(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc6(x)
+        x = self.softmax(x)
         return x
 
-
+# TODO rework network into transformer network
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims, dropout_rate=0.25):
         super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(1024, 512)
-        self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc3 = nn.Linear(512, 256)
-        self.dropout3 = nn.Dropout(dropout_rate)
-        self.fc4 = nn.Linear(256, 128)
-        self.dropout4 = nn.Dropout(dropout_rate)
-        self.fc5 = nn.Linear(128, 1)
-        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.bn1 = nn.BatchNorm1d(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.bn2 = nn.BatchNorm1d(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.bn3 = nn.BatchNorm1d(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.bn4 = nn.BatchNorm1d(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.bn5 = nn.BatchNorm1d(128)
+        self.fc6 = nn.Linear(128, 1)
+        self.relu = nn.LeakyReLU()
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, state):
-        x = self.relu(self.fc1(state))
-        x = self.dropout1(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout2(x)
-        x = self.relu(self.fc3(x))
-        x = self.dropout3(x)
-        x = self.relu(self.fc4(x))
-        x = self.dropout4(x)
-        q = self.fc5(x)
+        x = self.fc1(state)
+        if x.size(0) > 1:
+            x = self.bn1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc2(x)
+        if x.size(0) > 1:
+            x = self.bn2(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc3(x)
+        if x.size(0) > 1:
+            x = self.bn3(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc4(x)
+        if x.size(0) > 1:
+            x = self.bn4(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc5(x)
+        if x.size(0) > 1:
+            x = self.bn5(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        q = self.fc6(x)
         return q
 
 
 class PPO_Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128):
+    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -132,6 +240,7 @@ class PPO_Agent:
         self.actor = ActorNetwork(n_actions, input_dims).to(self.device)
         self.critic = CriticNetwork(input_dims).to(self.device)
         self.mini_batch_size = mini_batch_size
+        self.entropy_coefficient = entropy_coefficient
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha)
@@ -177,7 +286,7 @@ class PPO_Agent:
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
 
-                # Actor Network Loss
+                # Actor Network Loss with Entropy Regularization
                 probs = self.actor(batch_states)
                 dist = torch.distributions.Categorical(probs)
                 new_probs = dist.log_prob(batch_actions)
@@ -185,7 +294,8 @@ class PPO_Agent:
                 weighted_probs = batch_advantages * prob_ratio
                 clipped_probs = torch.clamp(prob_ratio, 1 - self.policy_clip, 1 + self.policy_clip)
                 weighted_clipped_probs = clipped_probs * batch_advantages
-                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
+                entropy = dist.entropy().mean()  # Entropy of the policy distribution
+                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean() - self.entropy_coefficient * entropy
 
                 # Critic Network Loss
                 critic_value = self.critic(batch_states).squeeze()
@@ -198,7 +308,8 @@ class PPO_Agent:
                 self.actor_optimizer.step()
                 self.critic_optimizer.step()
 
-        self.memory.clear_memory()
+            # Clear memory
+            self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
 
     def choose_action(self, observation):
         """
@@ -235,8 +346,7 @@ class PPO_Agent:
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
-
-        observation = np.array(observation).reshape(1, -1)
+        observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
         with torch.no_grad():
@@ -246,24 +356,20 @@ class PPO_Agent:
         return best_action
 
 
-import gym
-from gym import spaces
-
-
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradble_markets='EURUSD', provision=0.0001):
+    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
-        self.initial_balance = 10000
+        self.initial_balance = initial_balance
         self.current_position = 0
         self.variables = variables
         self.current_positions = current_positions
-        self.tradable_markets = tradble_markets
+        self.tradable_markets = tradable_markets
         self.provision = provision
 
         # Define action and observation space
-        self.action_space = spaces.Discrete(3)  # -1, 0, 1
+        self.action_space = spaces.Discrete(3)
         if self.current_positions:
             self.observation_space = spaces.Box(low=-np.inf,
                                                 high=np.inf,
@@ -284,9 +390,9 @@ class Trading_Environment_Basic(gym.Env):
             input_dims += 1  # Add one more dimension for current position
         return input_dims
 
-    def reset(self, day=None):
-        if day is not None:
-            self.current_step = day + self.look_back
+    def reset(self, observation=None):
+        if observation is not None:
+            self.current_step = observation + self.look_back
         else:
             self.current_step = self.look_back
 
@@ -333,6 +439,7 @@ class Trading_Environment_Basic(gym.Env):
         # Calculate log return based on action
         log_return = math.log(next_price / current_price) if current_price != 0 else 0
         reward = 0
+
         if mapped_action == 1:  # Buying
             reward = log_return
         elif mapped_action == -1:  # Selling
@@ -340,10 +447,10 @@ class Trading_Environment_Basic(gym.Env):
 
         # Calculate cost based on action and current position
         if mapped_action != self.current_position:
-            if abs(mapped_action - self.current_position) == 2:
-                provision = math.log(1 - 2 * self.provision)
+            if mapped_action == 0:
+                provision = 0
             else:
-                provision = math.log(1 - self.provision)
+                provision = math.log(1 - 2 * self.provision)  # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
         else:
             provision = 0
         reward += provision
@@ -386,79 +493,108 @@ class Trading_Environment_Basic(gym.Env):
 
 
 # Example usage
-df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '1D')
+df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '4H')
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-    {"indicator": "RSI", "mkf": "EURJPY", "length": 14},
-    {"indicator": "RSI", "mkf": "USDJPY", "length": 14},
     {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-    {"indicator": "ATR", "mkf": "EURJPY", "length": 24},
-    {"indicator": "SMA", "mkf": "EURUSD", "length": 100},
-    {"indicator": "ATR", "mkf": "USDJPY", "length": 24},
-    {"indicator": "MACD", "mkf": "EURUSD"},
-    {"indicator": "Stochastic", "mkf": "USDJPY"},
 
 ]
 add_indicators(df, indicators)
 df = df.dropna()
-start_date = '2017-01-01'
-split_date = '2020-01-01'
-df_train = df[start_date:split_date]
-df_test = df[split_date:]
+start_date = '2016-01-01'
+validation_date = '2021-01-01'
+test_date = '2022-01-01'
+df_train = df[start_date:validation_date]
+df_validation = df[validation_date:test_date]
+df_test = df[test_date:]
 
 variables = [
-    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "USDJPY"), "edit": "normalize"},
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURJPY"), "edit": "normalize"}
+    {"variable": ("Close", "EURJPY"), "edit": "normalize"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
+    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 
-print('number of train samples: ', len(df_train))
-print('number of test samples: ', len(df_test))
-look_back = 20
+window_size = '6M'
+look_back = 30
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
-batch_size = len(df_train) - look_back - 1
-epochs = 40
+batch_size = 2048
+epochs = 20  # 40
 mini_batch_size = 128
+starting_balance = 10000
 # Create the environment
-env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets, provision=provision)
-agent = PPO_Agent(n_actions=env.action_space.n, input_dims=env.calculate_input_dims(), batch_size=batch_size, n_epochs=epochs, mini_batch_size=mini_batch_size)
+env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance)
+agent = PPO_Agent(n_actions=env.action_space.n,
+                  input_dims=env.calculate_input_dims(),
+                  gamma=0.8,
+                  alpha=0.005,
+                  gae_lambda=0.8,
+                  policy_clip=0.2,
+                  entropy_coefficient=0.01,
+                  batch_size=batch_size,
+                  n_epochs=epochs,
+                  mini_batch_size=mini_batch_size)
 
-num_episodes = 100
+num_episodes = 50  # 100
 
 total_rewards = []
 episode_durations = []
-total_balnces = []
+total_balances = []
+index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
+columns = ['Final Balance']
+backtest_results = pd.DataFrame(index=index, columns=columns)
+
+# Assuming df_train is your DataFrame
+rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
 
 for episode in tqdm(range(num_episodes)):
+    # Randomly select one dataset from the rolling datasets
+    window_df = random.choice(rolling_datasets)
+
+    print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+    # Create a new environment with the randomly selected window's data
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance)
+
     observation = env.reset()
     done = False
     cumulative_reward = 0
     start_time = time.time()
     initial_balance = env.balance
+
     while not done:
         action, prob, val = agent.choose_action(observation)
         observation_, reward, done, info = env.step(action)
         agent.store_transition(observation, action, prob, val, reward, done)
         observation = observation_
         cumulative_reward += reward
-        if len(agent.memory.states) == agent.memory.batch_size:
+
+        # Check if enough data is collected or if the dataset ends
+        if len(agent.memory.states) >= agent.memory.batch_size or done:
             agent.learn()
+            agent.memory.clear_memory()
 
     end_time = time.time()
     episode_time = end_time - start_time
     total_rewards.append(cumulative_reward)
     episode_durations.append(episode_time)
-    total_balnces.append(env.balance)
-    calculated_final_balance = initial_balance * math.exp(cumulative_reward)
+    total_balances.append(env.balance)
 
-    if episode % 1 == 0:
-        print(f'\nEpisode: {episode + 1}')
-        print(f"Episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
-        print('----\n')
+    # Backtesting
+    validation_balance = generate_predictions_and_backtest(df_validation, agent, 'EURUSD', look_back, variables, True, provision, initial_balance=starting_balance)
+    test_balance = generate_predictions_and_backtest(df_test, agent, 'EURUSD', look_back, variables, True, provision, initial_balance=starting_balance)
+    backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
+    backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
+
+    print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+    print("-----------------------------------")
+
+
+print(backtest_results)
+
+# Plotting the results after all episodes
 
 import matplotlib.pyplot as plt
 
@@ -477,22 +613,68 @@ plt.ylabel('Total Reward')
 plt.show()
 
 # Plotting the results after all episodes
-plt.plot(total_balnces, color='green')
+plt.plot(total_balances, color='green')
 plt.title('Total Balance Over Episodes')
 plt.xlabel('Episode')
 plt.ylabel('Total Reward')
 plt.show()
 
+# Extracting data for plotting
+validation_pnl = backtest_results.loc[(slice(None), 'validation'), 'Final Balance']
+test_pnl = backtest_results.loc[(slice(None), 'test'), 'Final Balance']
+
+# Creating the plot
+plt.figure(figsize=(10, 6))
+plt.plot(range(num_episodes), validation_pnl.values, label='Validation Total PnL', marker='o')
+plt.plot(range(num_episodes), test_pnl.values, label='Test Total PnL', marker='x')
+
+plt.title('Total PnL Over Episodes')
+plt.xlabel('Episode')
+plt.ylabel('Total PnL')
+plt.legend()
+plt.show()
+
+
 # final prediction agent
+# Validation
+df_validation_probs = df_validation.copy()
+predictions_df = pd.DataFrame(index=df_validation.index, columns=['Predicted_Action'])
+validation_env = Trading_Environment_Basic(df_validation, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
+
+for validation_observation in range(len(df_validation) - validation_env.look_back):
+    observation = validation_env.reset(validation_observation)
+    action = agent.choose_best_action(observation)
+    predictions_df.iloc[validation_observation + validation_env.look_back] = action
+
+# Merge with df_validation
+df_validation_with_predictions = df_validation.copy()
+df_validation_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+
+# final prediction with probabilities
+validation_env_probs = Trading_Environment_Basic(df_validation_probs, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
+action_probabilities = []
+
+for validation_observation in range(len(df_validation_probs) - validation_env_probs.look_back):
+    observation = validation_env_probs.reset(validation_observation)  # Reset environment to the specific observation
+    probs = agent.get_action_probabilities(observation)
+    action_probabilities.append(probs[0])
+
+# Convert the list of probabilities to a DataFrame
+probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_nothing', 'Long'])
+
+# Join with the original validation DataFrame
+df_validation_with_probabilities = df_validation_probs.iloc[validation_env_probs.look_back:].reset_index(drop=True)
+df_validation_with_probabilities = pd.concat([df_validation_with_probabilities, probabilities_df], axis=1)
+
 # TEST
 df_test_probs = df_test.copy()
 predictions_df = pd.DataFrame(index=df_test.index, columns=['Predicted_Action'])
-test_env = Trading_Environment_Basic(df_test, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
+test_env = Trading_Environment_Basic(df_test, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
 
-for test_day in range(len(df_test) - test_env.look_back):
-    observation = test_env.reset(test_day)
+for test_observation in range(len(df_test) - test_env.look_back):
+    observation = test_env.reset(test_observation)
     action = agent.choose_best_action(observation)
-    predictions_df.iloc[test_day + test_env.look_back] = action
+    predictions_df.iloc[test_observation + test_env.look_back] = action
 
 # Merge with df_test
 df_test_with_predictions = df_test.copy()
@@ -500,11 +682,11 @@ df_test_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'
 
 
 # final prediction with probabilities
-test_env_probs = Trading_Environment_Basic(df_test_probs, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
+test_env_probs = Trading_Environment_Basic(df_test_probs, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
 action_probabilities = []
 
-for test_day in range(len(df_test_probs) - test_env_probs.look_back):
-    observation = test_env_probs.reset(test_day)  # Reset environment to the specific day
+for test_observation in range(len(df_test_probs) - test_env_probs.look_back):
+    observation = test_env_probs.reset(test_observation)  # Reset environment to the specific observation
     probs = agent.get_action_probabilities(observation)
     action_probabilities.append(probs[0])
 
@@ -518,23 +700,23 @@ df_test_with_probabilities = pd.concat([df_test_with_probabilities, probabilitie
 # TRAIN
 df_train_probs = df_train.copy()
 predictions_df = pd.DataFrame(index=df_train.index, columns=['Predicted_Action'])
-train_env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
+train_env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
 
-for train_day in range(len(df_train) - train_env.look_back):
-    observation = train_env.reset(train_day)
+for train_observation in range(len(df_train) - train_env.look_back):
+    observation = train_env.reset(train_observation)
     action = agent.choose_best_action(observation)
-    predictions_df.iloc[train_day + train_env.look_back] = action
+    predictions_df.iloc[train_observation + train_env.look_back] = action
 
 # Merge with df_train
 df_train_with_predictions = df_train.copy()
 df_train_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
 
-train_env_probs = Trading_Environment_Basic(df_train_probs, look_back=look_back, variables=variables, current_positions=True, tradble_markets=tradable_markets)
+train_env_probs = Trading_Environment_Basic(df_train_probs, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets)
 action_probabilities = []
 
-for train_day in range(len(df_train_probs) - train_env_probs.look_back):
-    observation = train_env_probs.reset(train_day)  # Reset environment to the specific day
+for train_observation in range(len(df_train_probs) - train_env_probs.look_back):
+    observation = train_env_probs.reset(train_observation)  # Reset environment to the specific observation
     probs = agent.get_action_probabilities(observation)
     action_probabilities.append(probs[0])
 
@@ -544,8 +726,3 @@ probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_noth
 # Join with the original train DataFrame
 df_train_with_probabilities = df_train_probs.iloc[train_env_probs.look_back:].reset_index(drop=True)
 df_train_with_probabilities = pd.concat([df_train_with_probabilities, probabilities_df], axis=1)
-
-
-
-
-

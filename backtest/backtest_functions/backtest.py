@@ -9,12 +9,13 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
 class Strategy:
-    def __init__(self, currencies, leverage=1.0, provision=0.0001, starting_capital=10000):
+    def __init__(self, df, tradable_markets, leverage=1.0, provision=0.0001, starting_capital=10000):
         self.trade_counter = 0
         self.leverage = leverage
         self.provision = provision
         self.starting_capital = starting_capital
-        self.currencies = currencies
+        self.tradable_markets = tradable_markets
+        self.df = df
         self.trade_history = pd.DataFrame(columns=['Trade_ID',
                                                    'Parent_ID',
                                                    'Currency',
@@ -32,24 +33,24 @@ class Strategy:
                                                    'PnL',
                                                    'Exit Reason'])
 
-    def calculate_new_positions(self, df, current_index):
+    def calculate_new_positions(self, current_index):
         raise NotImplementedError("Subclasses should implement this method")
 
-    def backtest(self, df):
-        current_index = df.index[0]
-        df['Capital'] = 0
-        df.loc[current_index, 'Capital'] = self.starting_capital
-        df['Available_Capital'] = 0
-        df.loc[current_index, 'Available_Capital'] = self.starting_capital
-        df['Margin'] = 1
-        df['Provisions'] = 0
+    def backtest(self):
+        current_index = self.df.index[0]
+        self.df['Capital'] = 0
+        self.df.loc[current_index, 'Capital'] = self.starting_capital
+        self.df['Available_Capital'] = 0
+        self.df.loc[current_index, 'Available_Capital'] = self.starting_capital
+        self.df['Margin'] = 1
+        self.df['Provisions'] = 0
 
-        for currency in self.currencies:
-            df[('Position_proposition', currency)] = 0
-            df[('Capital_in', currency)] = 0
-            df[('Average_Open_Position', currency)] = 0
-            df[('Unit_size'), currency] = 0
-            df[('PnL', currency)] = 0
+        for market in self.tradable_markets:
+            self.df[('Position_proposition', currency)] = 0
+            self.df[('Capital_in', currency)] = 0
+            self.df[('Average_Open_Position', currency)] = 0
+            self.df[('Unit_size'), currency] = 0
+            self.df[('PnL', currency)] = 0
 
         for i in tqdm(range(1, len(df))):
             previous_index = current_index
