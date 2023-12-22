@@ -237,6 +237,7 @@ class PPO_Agent:
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
         self.static_dim = 1
+
         # Initialize the actor and critic networks
         self.actor = TFT_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
         self.critic = TFT_CriticNetwork(input_dims, self.static_dim).to(self.device)
