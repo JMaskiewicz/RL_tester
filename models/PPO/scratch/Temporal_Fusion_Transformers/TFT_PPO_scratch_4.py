@@ -509,7 +509,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 50
+num_episodes = 5
 
 total_rewards = []
 episode_durations = []

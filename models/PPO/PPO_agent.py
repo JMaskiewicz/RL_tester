@@ -308,8 +308,8 @@ class PPO_Agent:
                 self.actor_optimizer.step()
                 self.critic_optimizer.step()
 
-            # Clear memory
-            self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
+        # Clear memory
+        self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
 
     def choose_action(self, observation):
         """
@@ -538,7 +538,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size)
 
-num_episodes = 50  # 100
+num_episodes = 5  # 100
 
 total_rewards = []
 episode_durations = []

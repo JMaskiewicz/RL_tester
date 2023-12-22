@@ -4,8 +4,6 @@ TFT PPO
 - different reward function (sharpe ratio), penalty for high volatility, provision for keeping position open after n steps
 
 """
-import torch.nn.functional as F
-
 import numpy as np
 import pandas as pd
 import time
@@ -18,6 +16,7 @@ import math
 import gym
 from gym import spaces
 from itertools import cycle
+import torch.nn.functional as F
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
@@ -163,7 +162,7 @@ class TFT_NetworkBase(nn.Module):
     def forward(self, state, static_input):
         lstm_output, _ = self.lstm(state)
         if lstm_output.dim() == 2:
-            lstm_output = lstm_output.unsqueeze(0)  # Add batch dimension
+            lstm_output = lstm_output.unsqueeze(0)
 
         # Process static input
         batch_size, seq_len, _ = lstm_output.shape
@@ -172,7 +171,7 @@ class TFT_NetworkBase(nn.Module):
 
         # Combine LSTM output and static input
         combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
-        attention_output, _ = self.self_attention(combined_input)  # Only return attention_output
+        attention_output, _ = self.self_attention(combined_input)
 
         return attention_output
 
@@ -315,8 +314,8 @@ class PPO_Agent:
                 self.actor_optimizer.step()
                 self.critic_optimizer.step()
 
-            # Clear memory
-            self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
+        # Clear memory
+        self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
 
     def choose_action(self, observation, static_input):
         if not isinstance(observation, np.ndarray):
@@ -441,9 +440,11 @@ class Trading_Environment_Basic(gym.Env):
             if mapped_action == 0:
                 provision = 0
             else:
-                provision = math.log(1 - 2 * self.provision)  # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
+                # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
+                provision = math.log(1 - 2 * self.provision)
         else:
             provision = 0
+
         reward += provision
 
         # Update the balance
@@ -485,13 +486,13 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '6M'
 starting_balance = 10000
-look_back = 24
+look_back = 18
 provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40  # 40
-mini_batch_size = 64
+epochs = 20  # 40
+mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5

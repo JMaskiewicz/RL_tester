@@ -1,5 +1,7 @@
 """
-the newest version of Proximal Policy Optimization agent with Temporal Fusion Transformer
+TFT PPO
+- base model as support for PPO agent
+- different reward function (sharpe ratio), penalty for high volatility, provision for keeping position open after n steps
 
 """
 import numpy as np
@@ -566,7 +568,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 250
+num_episodes = 100
 
 total_rewards = []
 episode_durations = []

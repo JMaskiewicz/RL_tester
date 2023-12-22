@@ -4,6 +4,33 @@ from tqdm import tqdm
 from technical_analysys.indicators import rsi, simple_moving_average, average_true_range, macd, stochastic_oscillator, parabolic_sar
 from technical_analysys.volatility_functions import close_to_close_volatility, parkinson_volatility, garman_klass_volatility, rogers_satchell_volatility
 
+def add_returns(df, mkf, price_type='Close', n=1):
+    """
+    Calculates and adds simple returns to the DataFrame.
+
+    Parameters:
+    - df: DataFrame with multi-level columns (price type, market identifier).
+    - mkf: Market identifier to calculate returns for.
+    - price_type: Type of price to use for returns calculation ('Close', 'Open', etc.).
+    - n: Period over which to calculate the returns.
+    """
+    # Ensure the market and price type are in the DataFrame
+    if (price_type, mkf) in df.columns:
+        # Calculate simple returns
+        df[('Returns_' + price_type + '_' + str(n), mkf)] = df[(price_type, mkf)].pct_change(n)
+    else:
+        print(f"{price_type} data for market {mkf} not found in DataFrame")
+    return df
+
+def add_log_returns(df, mkf, price_type='Close', n=1):
+    # Ensure the market and price type are in the DataFrame
+    if (price_type, mkf) in df.columns:
+        # Calculate log returns
+        df[('Log_Returns_' + price_type + '_' + str(n), mkf)] = np.log(df[(price_type, mkf)] / df[(price_type, mkf)].shift(n))
+    else:
+        print(f"{price_type} data for market {mkf} not found in DataFrame")
+    return df
+
 def add_indicators(df, indicators):
     for indicator in tqdm(indicators):
         mkf = indicator["mkf"]
