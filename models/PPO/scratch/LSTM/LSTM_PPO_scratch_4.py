@@ -1,7 +1,5 @@
-"""
-the newest version of Proximal Policy Optimization agent with Temporal Fusion Transformer
+import torch.nn.functional as F
 
-"""
 import numpy as np
 import pandas as pd
 import time
@@ -14,11 +12,10 @@ import math
 import gym
 from gym import spaces
 from itertools import cycle
-import torch.nn.functional as F
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
-from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
+from technical_analysys.add_indicators import add_indicators
 from data.edit import normalize_data, standardize_data
 
 # Set seeds for reproducibility
@@ -150,9 +147,9 @@ class SelfAttention(nn.Module):
         return outputs, weights
 
 
-class TFT_NetworkBase(nn.Module):
+class LSTM_NetworkBase(nn.Module):
     def __init__(self, input_dims, static_dim, hidden_size=1024, n_layers=2):
-        super(TFT_NetworkBase, self).__init__()
+        super(LSTM_NetworkBase, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size,
                             batch_first=True, num_layers=n_layers, dropout=0.2)
         self.self_attention = SelfAttention(hidden_size + static_dim)
@@ -160,7 +157,7 @@ class TFT_NetworkBase(nn.Module):
     def forward(self, state, static_input):
         lstm_output, _ = self.lstm(state)
         if lstm_output.dim() == 2:
-            lstm_output = lstm_output.unsqueeze(0)
+            lstm_output = lstm_output.unsqueeze(0)  # Add batch dimension
 
         # Process static input
         batch_size, seq_len, _ = lstm_output.shape
@@ -169,13 +166,13 @@ class TFT_NetworkBase(nn.Module):
 
         # Combine LSTM output and static input
         combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
-        attention_output, _ = self.self_attention(combined_input)
+        attention_output, _ = self.self_attention(combined_input)  # Only return attention_output
 
         return attention_output
 
-class TFT_ActorNetwork(TFT_NetworkBase):
+class LSTM_ActorNetwork(LSTM_NetworkBase):
     def __init__(self, n_actions, input_dims, static_dim, hidden_size=1024):
-        super(TFT_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
@@ -198,9 +195,9 @@ class TFT_ActorNetwork(TFT_NetworkBase):
         action_probs = torch.softmax(self.policy(x), dim=-1)
         return action_probs
 
-class TFT_CriticNetwork(TFT_NetworkBase):
+class LSTM_CriticNetwork(LSTM_NetworkBase):
     def __init__(self, input_dims, static_dim, hidden_size=1024):
-        super(TFT_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
@@ -237,10 +234,9 @@ class PPO_Agent:
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
         self.static_dim = 1
-
         # Initialize the actor and critic networks
-        self.actor = TFT_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
-        self.critic = TFT_CriticNetwork(input_dims, self.static_dim).to(self.device)
+        self.actor = LSTM_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
+        self.critic = LSTM_CriticNetwork(input_dims, self.static_dim).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
@@ -314,7 +310,7 @@ class PPO_Agent:
                 self.critic_optimizer.step()
 
         # Clear memory
-        self.memory.clear_memory()
+        self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
 
     def choose_action(self, observation, static_input):
         if not isinstance(observation, np.ndarray):
@@ -339,7 +335,8 @@ class PPO_Agent:
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
-        static_input = torch.tensor([0], dtype=torch.float).to(self.device)
+        # Assuming static_input is needed and is known here. If not, adjust accordingly.
+        static_input = torch.tensor([0], dtype=torch.float).to(self.device)  # Example static input, adjust as needed
 
         # Get the action probabilities from the actor network
         action_probs = self.actor(state, static_input).cpu().detach().numpy()
@@ -354,7 +351,7 @@ class PPO_Agent:
 
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1, window_size_statics=30):
+    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
@@ -366,12 +363,6 @@ class Trading_Environment_Basic(gym.Env):
         self.provision = provision
         self.leverage = leverage
 
-        # for reward function
-        self.holding_duration = 0
-        self.rolling_returns = []
-        self.rolling_downside_returns = []
-        self.window_size_statics = window_size_statics
-
         # Define action and observation space
         self.action_space = spaces.Discrete(3)
 
@@ -380,6 +371,8 @@ class Trading_Environment_Basic(gym.Env):
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
         input_dims = num_variables * self.look_back  # Variables times look_back
+        if self.current_position:
+            input_dims += 1  # Add one more dimension for current position
         return input_dims
 
     def reset(self, observation=None):
@@ -413,20 +406,9 @@ class Trading_Environment_Basic(gym.Env):
                 scaled_data = data
 
             scaled_observation.extend(scaled_data)
+
+
         return np.array(scaled_observation)
-
-    def calculate_sharpe_ratio(self, returns, risk_free_rate=0):
-        excess_returns = returns - risk_free_rate
-        if np.std(excess_returns) == 0:
-            return 0
-        return np.mean(excess_returns) / np.std(excess_returns)
-
-    def calculate_sortino_ratio(self, returns, risk_free_rate=0):
-        excess_returns = returns - risk_free_rate
-        downside_returns = [r for r in excess_returns if r < 0]
-        if len(downside_returns) == 0 or np.std(downside_returns) == 0:
-            return 0
-        return np.mean(excess_returns) / np.std(downside_returns)
 
     def step(self, action):
         # Existing action mapping
@@ -454,48 +436,23 @@ class Trading_Environment_Basic(gym.Env):
             if mapped_action == 0:
                 provision = 0
             else:
-                # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
-                provision = math.log(1 - 2 * self.provision)
+                provision = math.log(1 - 2 * self.provision)  # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
         else:
             provision = 0
-
         reward += provision
 
-        # Update rolling returns
-        self.rolling_returns.append(reward)
-
         # Update the balance
-        self.balance *= math.exp(reward)  # Update balance using exponential of reward before applying other penalties
+        self.balance *= math.exp(reward)  # Update balance using exponential of reward
 
         # Update current position and step
         self.current_position = mapped_action
         self.current_step += 1
 
-        if len(self.rolling_returns) >= self.window_size_statics:
-            sharpe_ratio = self.calculate_sharpe_ratio(np.array(self.rolling_returns[-self.window_size_statics:]))
-            sortino_ratio = self.calculate_sortino_ratio(np.array(self.rolling_downside_returns[-self.window_size_statics:]))
-        else:
-            sharpe_ratio = sortino_ratio = 0
-
-        # Update holding duration
-        if mapped_action == self.current_position and mapped_action != 0:
-            self.holding_duration += 1
-        else:
-            self.holding_duration = 0  # Reset if the position changes or goes to 0
-
-        # Calculate holding penalty
-        if self.holding_duration > 10:
-            holding_penalty = -0.001 * self.holding_duration
-        else:
-            holding_penalty = 0
-
-        # calculate reward with other penalties
-        final_reward = reward + sharpe_ratio/10 + sortino_ratio/10 + holding_penalty
-        # print(f"Reward: {reward}, Sharpe Ratio: {sharpe_ratio}, Sortino Ratio: {sortino_ratio}, Holding Penalty: {holding_penalty}")
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
             self.done = True
-        return self._next_observation(), final_reward, self.done, {}
+
+        return self._next_observation(), reward, self.done, {}
 
 # Example usage
 # Stock market variables
@@ -506,19 +463,6 @@ indicators = [
     {"indicator": "ATR", "mkf": "EURUSD", "length": 24},]
 
 add_indicators(df, indicators)
-returns = [
-    {"mkf": "EURUSD", "price_type": "Close", "n": 1},
-    {"mkf": 'USDJPY', "price_type": "Close", "n": 1},
-    {"mkf": 'EURJPY', "price_type": "Close", "n": 1},
-]
-
-for return_info in returns:
-    mkf = return_info["mkf"]
-    price_type = return_info.get("price_type", "Close")
-    n = return_info.get("n", 1)
-    df = add_returns(df, mkf, price_type, n)
-    df = add_log_returns(df, mkf, price_type, n)
-
 df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
 start_date = '2016-01-01'
@@ -533,26 +477,24 @@ variables = [
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
     {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Log_Returns_Close_1", "EURUSD"), "edit": "None"},
-    {"variable": ("Log_Returns_Close_1", "USDJPY"), "edit": "None"},
-    {"variable": ("Log_Returns_Close_1", "EURJPY"), "edit": "None"},
 ]
 tradable_markets = 'EURUSD'
 window_size = '6M'
 starting_balance = 10000
-look_back = 18
+look_back = 24
 provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 30  # 40
-mini_batch_size = 128
-leverage = 10
+epochs = 40  # 40
+mini_batch_size = 64
+leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
 # This is a transformer model with self-attention for time series forecasting
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
 
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
@@ -567,7 +509,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 250
+num_episodes = 5
 
 total_rewards = []
 episode_durations = []
@@ -578,16 +520,12 @@ rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  l
 
 # Create a DataFrame to store the backtest results
 index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
-columns = ['Final Balance', 'Dataset Index']  # Add 'Dataset Index' column
+columns = ['Final Balance']
 backtest_results = pd.DataFrame(index=index, columns=columns)
-
-# Use 'cycle' to endlessly iterate over the rolling_datasets
-dataset_iterator = cycle(rolling_datasets)
 
 for episode in tqdm(range(num_episodes)):
     # Randomly select one dataset from the rolling datasets
-    window_df = next(dataset_iterator)
-    dataset_index = episode % len(rolling_datasets)
+    window_df = random.choice(rolling_datasets)
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
@@ -624,8 +562,6 @@ for episode in tqdm(range(num_episodes)):
     test_balance = generate_predictions_and_backtest(df_test, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage)
     backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
     backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
-    backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
-    backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
 
     print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
     print("-----------------------------------")

@@ -93,9 +93,9 @@ class SelfAttention(nn.Module):
         return outputs, weights
 
 
-class TFT_NetworkBase(nn.Module):
+class LSTM_NetworkBase(nn.Module):
     def __init__(self, input_dims, static_dim, hidden_size=1024, n_layers=2):
-        super(TFT_NetworkBase, self).__init__()
+        super(LSTM_NetworkBase, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size,
                             batch_first=True, num_layers=n_layers, dropout=0.2)
         self.self_attention = SelfAttention(hidden_size + static_dim)
@@ -116,9 +116,9 @@ class TFT_NetworkBase(nn.Module):
 
         return attention_output
 
-class TFT_ActorNetwork(TFT_NetworkBase):
+class LSTM_ActorNetwork(LSTM_NetworkBase):
     def __init__(self, n_actions, input_dims, static_dim, hidden_size=1024):
-        super(TFT_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
@@ -145,9 +145,9 @@ class TFT_ActorNetwork(TFT_NetworkBase):
         action_probs = torch.softmax(self.policy(x), dim=-1)
         return action_probs
 
-class TFT_CriticNetwork(TFT_NetworkBase):
+class LSTM_CriticNetwork(LSTM_NetworkBase):
     def __init__(self, input_dims, static_dim, hidden_size=1024):
-        super(TFT_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
@@ -189,8 +189,8 @@ class PPO_Agent:
         self.l1_lambda = l1_lambda
         self.static_dim = 1
         # Initialize the actor and critic networks
-        self.actor = TFT_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
-        self.critic = TFT_CriticNetwork(input_dims, self.static_dim).to(self.device)
+        self.actor = LSTM_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
+        self.critic = LSTM_CriticNetwork(input_dims, self.static_dim).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 

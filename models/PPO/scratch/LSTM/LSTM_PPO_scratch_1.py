@@ -31,7 +31,6 @@ class PPOMemory:
         self.actions = []
         self.rewards = []
         self.dones = []
-        self.static_inputs = []
 
         self.batch_size = batch_size
 
@@ -42,24 +41,21 @@ class PPOMemory:
         np.random.shuffle(indices)
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        states = np.array(self.states)[indices]
-        actions = np.array(self.actions)[indices]
-        probs = np.array(self.probs)[indices]
-        vals = np.array(self.vals)[indices]
-        rewards = np.array(self.rewards)[indices]
-        dones = np.array(self.dones)[indices]
-        static_inputs = np.array(self.static_inputs)[indices]
+        return np.array(self.states), \
+            np.array(self.actions), \
+            np.array(self.probs), \
+            np.array(self.vals), \
+            np.array(self.rewards), \
+            np.array(self.dones), \
+            batches
 
-        return states, actions, probs, vals, rewards, dones, static_inputs, batches
-
-    def store_memory(self, state, action, probs, vals, reward, done, static_input):
+    def store_memory(self, state, action, probs, vals, reward, done):
         self.states.append(state)
         self.actions.append(action)
         self.probs.append(probs)
         self.vals.append(vals)
         self.rewards.append(float(reward))
         self.dones.append(done)
-        self.static_inputs.append(static_input)
 
     def clear_memory(self):
         self.states = []
@@ -68,7 +64,7 @@ class PPOMemory:
         self.rewards = []
         self.dones = []
         self.vals = []
-        self.static_inputs = []
+
 
 class SelfAttention(nn.Module):
     def __init__(self, hidden_size):
@@ -86,51 +82,43 @@ class SelfAttention(nn.Module):
         outputs = (lstm_output * weights.unsqueeze(-1)).sum(dim=1)
         return outputs, weights
 
-class TFT_ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, static_dim, hidden_size=128):
-        super(TFT_ActorNetwork, self).__init__()
-        self.hidden_size = hidden_size
+
+class LSTM_ActorNetwork(nn.Module):
+    def __init__(self, n_actions, input_dims, hidden_size=128):
+        super(LSTM_ActorNetwork, self).__init__()
+        self.self_attention = SelfAttention(hidden_size)
+
+        # Assume lstm_output size to be hidden_size
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size, batch_first=True)
-        self.self_attention = SelfAttention(hidden_size + static_dim)
-        self.policy = nn.Linear(hidden_size + static_dim, n_actions)
 
-    def forward(self, state, static_input):
+        # Final layer to output action probabilities
+        self.policy = nn.Linear(hidden_size, n_actions)
+
+    def forward(self, state):
+        # Assuming state shape is [batch, sequence, features]
         lstm_output, (hidden, cell) = self.lstm(state)
-        # Ensure lstm_output has three dimensions [batch, seq_len, features]
-        if lstm_output.dim() == 2:
-            lstm_output = lstm_output.unsqueeze(0)  # Add a batch dimension
+        attention_output, weights = self.self_attention(lstm_output)
 
-        batch_size, seq_len, features = lstm_output.shape
-        # Ensure static_input is [batch_size, 1]
-        static_input = static_input.unsqueeze(-1)
-        static_input_expanded = static_input.expand(batch_size, seq_len, -1)
-
-        combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
-        attention_output, weights = self.self_attention(combined_input)
         action_probs = torch.softmax(self.policy(attention_output), dim=-1)
         return action_probs
 
-class TFT_CriticNetwork(nn.Module):
-    def __init__(self, input_dims, static_dim, hidden_size=128):
-        super(TFT_CriticNetwork, self).__init__()
-        self.hidden_size = hidden_size
+
+class LSTM_CriticNetwork(nn.Module):
+    def __init__(self, input_dims, hidden_size=128):
+        super(LSTM_CriticNetwork, self).__init__()
+        self.self_attention = SelfAttention(hidden_size)
+
+        # LSTM layer
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size, batch_first=True)
-        self.self_attention = SelfAttention(hidden_size + static_dim)
-        self.value = nn.Linear(hidden_size + static_dim, 1)
 
-    def forward(self, state, static_input):
+        # Final layer to output value estimate
+        self.value = nn.Linear(hidden_size, 1)
+
+    def forward(self, state):
+        # Assuming state shape is [batch, sequence, features]
         lstm_output, (hidden, cell) = self.lstm(state)
-        # Ensure lstm_output has three dimensions [batch, seq_len, features]
-        if lstm_output.dim() == 2:
-            lstm_output = lstm_output.unsqueeze(0)  # Add a batch dimension
+        attention_output, weights = self.self_attention(lstm_output)
 
-        batch_size, seq_len, features = lstm_output.shape
-        # Ensure static_input is [batch_size, 1]
-        static_input = static_input.unsqueeze(-1)
-        static_input_expanded = static_input.expand(batch_size, seq_len, -1)
-
-        combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
-        attention_output, weights = self.self_attention(combined_input)
         value = self.value(attention_output)
         return value
 
@@ -147,22 +135,22 @@ class PPO_Agent:
         self.mini_batch_size = mini_batch_size
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
-        self.static_dim = 1
+
         # Initialize the actor and critic networks
-        self.actor = TFT_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
-        self.critic = TFT_CriticNetwork(input_dims, self.static_dim).to(self.device)
+        self.actor = LSTM_ActorNetwork(n_actions, input_dims).to(self.device)
+        self.critic = LSTM_CriticNetwork(input_dims).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
         self.memory = PPOMemory(batch_size)
 
-    def store_transition(self, state, action, probs, vals, reward, done, static_input):
-        self.memory.store_memory(state, action, probs, vals, reward, done, static_input)
+    def store_transition(self, state, action, probs, vals, reward, done):
+        self.memory.store_memory(state, action, probs, vals, reward, done)
 
     def learn(self):
         for _ in range(self.n_epochs):
             # Generating the data for the entire batch
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_input_arr, batches = self.memory.generate_batches()
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
 
             values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
             advantage = np.zeros(len(reward_arr), dtype=np.float32)
@@ -185,7 +173,6 @@ class PPO_Agent:
             for start_idx in range(0, num_samples, self.mini_batch_size):
                 # Extract indices for the mini-batch
                 minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
-                static_input_batch = static_input_arr[minibatch_indices]
 
                 # Extract data for the current mini-batch
                 batch_states = torch.tensor(state_arr[minibatch_indices], dtype=torch.float).to(self.device)
@@ -198,7 +185,7 @@ class PPO_Agent:
                 self.critic_optimizer.zero_grad()
 
                 # Actor Network Loss with Entropy Regularization
-                probs = self.actor(batch_states, torch.tensor(static_input_batch, dtype=torch.float).to(self.device))
+                probs = self.actor(batch_states)
                 dist = torch.distributions.Categorical(probs)
                 new_probs = dist.log_prob(batch_actions)
                 prob_ratio = torch.exp(new_probs - batch_old_probs)
@@ -211,7 +198,7 @@ class PPO_Agent:
                 actor_loss += self.l1_lambda * l1_loss_actor
 
                 # Critic Network Loss
-                critic_value = self.critic(batch_states, torch.tensor(static_input_batch, dtype=torch.float).to(self.device)).squeeze()
+                critic_value = self.critic(batch_states).squeeze()
                 returns = batch_advantages + batch_values
                 critic_loss = nn.functional.mse_loss(critic_value, returns)
                 l1_loss_critic = sum(torch.sum(torch.abs(param)) for param in self.critic.parameters())
@@ -224,21 +211,20 @@ class PPO_Agent:
                 self.critic_optimizer.step()
 
         # Clear memory
-        self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
+        self.memory.clear_memory()
 
-    def choose_action(self, observation, static_input):
+    def choose_action(self, observation):
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = observation.reshape(1, -1)
-        static_input = torch.tensor([static_input], dtype=torch.float).to(self.device)
+        observation = np.array(observation).reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        probs = self.actor(state, static_input)
+        probs = self.actor(state)
 
         dist = torch.distributions.Categorical(probs)
         action = dist.sample()
         log_prob = dist.log_prob(action)
-        value = self.critic(state, static_input)
+        value = self.critic(state)
 
         return action.item(), log_prob.item(), value.item()
 
@@ -250,27 +236,37 @@ class PPO_Agent:
 
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
+    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = initial_balance
         self.current_position = 0
         self.variables = variables
-
+        self.current_positions = current_positions
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
 
         # Define action and observation space
         self.action_space = spaces.Discrete(3)
+        if self.current_positions:
+            self.observation_space = spaces.Box(low=-np.inf,
+                                                high=np.inf,
+                                                shape=(look_back + 1,),  # +1 for current position
+                                                dtype=np.float32)
+        else:
+            self.observation_space = spaces.Box(low=-np.inf,
+                                                high=np.inf,
+                                                shape=(look_back,),
+                                                dtype=np.float32)
 
         self.reset()
 
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
         input_dims = num_variables * self.look_back  # Variables times look_back
-        if self.current_position:
+        if self.current_positions:
             input_dims += 1  # Add one more dimension for current position
         return input_dims
 
@@ -306,6 +302,8 @@ class Trading_Environment_Basic(gym.Env):
 
             scaled_observation.extend(scaled_data)
 
+        if self.current_positions:
+            scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
 
         return np.array(scaled_observation)
 
@@ -355,14 +353,14 @@ class Trading_Environment_Basic(gym.Env):
 
 # Example usage
 # Stock market variables
-df = load_data(['EURUSD', 'USDJPY'], '1D')
+df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '1D')
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},]
 add_indicators(df, indicators)
 
 df = df.dropna()
-start_date = '2020-10-01'
+start_date = '2017-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -371,6 +369,7 @@ df_test = df[test_date:]
 variables = [
     {"variable": ("Close", "USDJPY"), "edit": "normalize"},
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+    {"variable": ("Close", "EURJPY"), "edit": "normalize"},
     {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
@@ -383,12 +382,12 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 batch_size = 2048
 epochs = 5
 mini_batch_size = 256
-leverage = 30
+leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
 # This is a transformer model with self-attention for time series forecasting
 # Create the environment
-env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=False, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
 
 agent = PPO_Agent(n_actions=env.action_space.n,
@@ -419,7 +418,7 @@ for episode in tqdm(range(num_episodes)):
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=False, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
     observation = env.reset()
     done = False
@@ -428,11 +427,9 @@ for episode in tqdm(range(num_episodes)):
     initial_balance = env.balance
 
     while not done:
-        current_position = env.current_position
-        action, prob, val = agent.choose_action(observation, current_position)
-        static_input = current_position
+        action, prob, val = agent.choose_action(observation)
         observation_, reward, done, info = env.step(action)
-        agent.store_transition(observation, action, prob, val, reward, done, static_input)
+        agent.store_transition(observation, action, prob, val, reward, done)
         observation = observation_
         cumulative_reward += reward
 
