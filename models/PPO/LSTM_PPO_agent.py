@@ -1,5 +1,5 @@
 """
-the newest version of Proximal Policy Optimization agent with Temporal Fusion Transformer
+the newest version of Proximal Policy Optimization agent with LSTM
 
 """
 import numpy as np
