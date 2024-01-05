@@ -556,14 +556,13 @@ mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
-# This is a transformer model with self-attention for time series forecasting
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.5,
-                  alpha=0.02,
+                  alpha=0.02,  # lower learning rate
                   gae_lambda=0.8,
                   policy_clip=0.2,
                   entropy_coefficient=0.1,  # maybe try higher entropy coefficient
@@ -591,7 +590,6 @@ backtest_results = pd.DataFrame(index=index, columns=columns)
 dataset_iterator = cycle(rolling_datasets)
 
 for episode in tqdm(range(num_episodes)):
-    # Randomly select one dataset from the rolling datasets
     window_df = next(dataset_iterator)
     dataset_index = episode % len(rolling_datasets)
 
