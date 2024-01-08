@@ -1,5 +1,5 @@
 """
-deterministic data set to check if the model is able to learn to trade on sinusoidal data set with minor noise
+deterministic data set to check if the model is able to learn to trade on up/sinusoidal data set with very minor noise
 
 """
 import numpy as np
@@ -473,7 +473,7 @@ class Trading_Environment_Basic(gym.Env):
             holding_penalty = 0
 
         # calculate reward with other penalties
-        final_reward = reward + holding_penalty
+        final_reward = reward  # + holding_penalty
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -492,7 +492,7 @@ def generate_sinusoidal_data(currencies, start_date, end_date, period_years=3, n
 
     for currency in currencies:
         sinusoidal_values = np.sin(time_series)
-        noise = np.random.normal(scale=noise_level, size=len(date_range))
+        noise = np.random.normal(scale=noise_level, size=len(date_range))/10000
 
         # Adding noise to the sinusoidal values
         noisy_sinusoidal_values = sinusoidal_values + noise
@@ -510,7 +510,36 @@ def generate_sinusoidal_data(currencies, start_date, end_date, period_years=3, n
 
     return sinusoidal_data
 
-df = generate_sinusoidal_data(["EURUSD"], '2013-01-01', '2023-01-01')
+
+def generate_linear_data(currencies, start_date, end_date, noise_level=0.01):
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+
+    # Creating a linear line from 1 to 2 over the time frame
+    linear_values = np.linspace(1, 2, len(date_range))
+
+    linear_data = pd.DataFrame(index=date_range)
+
+    for currency in currencies:
+        noise = np.random.normal(scale=noise_level, size=len(date_range))
+
+        # Adding noise to the linear values
+        noisy_linear_values = linear_values + noise
+
+        temp_df = pd.DataFrame({
+            ('Open', currency): noisy_linear_values,
+            ('High', currency): noisy_linear_values + 0.05 * noise,  # Adding noise to High
+            ('Low', currency): noisy_linear_values - 0.05 * noise,  # Adding noise to Low
+            ('Close', currency): noisy_linear_values  # Assuming Close is the same as the noisy linear value
+        }, index=date_range)
+
+        linear_data = pd.concat([linear_data, temp_df], axis=1)
+
+    linear_data.columns = pd.MultiIndex.from_tuples(linear_data.columns, names=[None, 'Currency'])
+
+    return linear_data
+
+
+df = generate_linear_data(["EURUSD"],'2013-01-01', '2023-01-01', 0.0001)
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -527,20 +556,20 @@ df_train = df[start_date:validation_date]
 df_validation = df[validation_date:test_date]
 df_test = df[test_date:]
 variables = [
-    {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+    {"variable": ("Close", "EURUSD"), "edit": "None"},
+    #{"variable": ("RSI_14", "EURUSD"), "edit": "None"},
+    #{"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 10
-provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.000000000001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 2048
-epochs = 20
-mini_batch_size = 32
+batch_size = 512
+epochs = 30
+mini_batch_size = 64
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
@@ -549,18 +578,18 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
-                  gamma=0.5,
-                  alpha=0.001,  # lower learning rate
+                  gamma=0.8,
+                  alpha=0.0001,  # lower learning rate
                   gae_lambda=0.8,
                   policy_clip=0.2,
-                  entropy_coefficient=0.1,  # maybe try higher entropy coefficient
+                  entropy_coefficient=0.001,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 300  # 250
+num_episodes = 100  # 250
 
 total_rewards = []
 episode_durations = []
@@ -601,7 +630,7 @@ for episode in tqdm(range(num_episodes)):
         cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if len(agent.memory.states) >= agent.memory.batch_size or done:
+        if len(agent.memory.states) >= agent.memory.batch_size:
             agent.learn()
             agent.memory.clear_memory()
 
