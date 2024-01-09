@@ -1,5 +1,4 @@
 """
-the newest version of PPO agent
 
 """
 import numpy as np
@@ -13,16 +12,18 @@ import random
 import math
 import gym
 from gym import spaces
+from itertools import cycle
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators
 from data.edit import normalize_data, standardize_data
 
-# TODO rework backtesting
-def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, current_positions, provision=0.0001, initial_balance=10000):
+
+# TODO add backtest function
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
     # Create a validation environment
-    validation_env = Trading_Environment_Basic(df, look_back, variables, current_positions, mkf)
+    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=initial_balance, leverage=leverage)
 
     # Generate Predictions
     predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
@@ -38,6 +39,9 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, curr
     # Backtesting
     balance = initial_balance
     current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
+
+    # keep track of number of trades
+    number_of_trades = 0
 
     for i in range(1, len(df_with_predictions)):
         action = df_with_predictions['Predicted_Action'].iloc[i]
@@ -59,6 +63,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, curr
                 provision_cost = 0
             else:
                 provision_cost = math.log(1 - 2 * provision)
+                number_of_trades += 1
         else:
             provision_cost = 0
         reward += provision_cost
@@ -69,7 +74,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, curr
         # Update current position
         current_position = action
 
-    return balance
+    return balance, number_of_trades
 
 
 # Set seeds for reproducibility
@@ -77,7 +82,6 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-# TODO use deque instead of list
 class PPOMemory:
     def __init__(self, batch_size):
         self.states = []
@@ -121,7 +125,6 @@ class PPOMemory:
         self.vals = []
 
 
-# TODO rework network into transformer network
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, dropout_rate=0.25):
         super(ActorNetwork, self).__init__()
@@ -175,7 +178,6 @@ class ActorNetwork(nn.Module):
         x = self.softmax(x)
         return x
 
-# TODO rework network into transformer network
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims, dropout_rate=0.25):
         super(CriticNetwork, self).__init__()
@@ -249,6 +251,7 @@ class PPO_Agent:
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
 
+
     def learn(self):
         for _ in range(self.n_epochs):
             # Generating the data for the entire batch
@@ -308,8 +311,7 @@ class PPO_Agent:
                 self.actor_optimizer.step()
                 self.critic_optimizer.step()
 
-        # Clear memory
-        self.memory.clear_memory()  # TODO check if this is correct place or should be outside of the loop
+        self.memory.clear_memory()
 
     def choose_action(self, observation):
         """
@@ -357,7 +359,7 @@ class PPO_Agent:
 
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000):
+    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
@@ -367,6 +369,8 @@ class Trading_Environment_Basic(gym.Env):
         self.current_positions = current_positions
         self.tradable_markets = tradable_markets
         self.provision = provision
+        self.leverage = leverage
+        self.holding_duration = 10
 
         # Define action and observation space
         self.action_space = spaces.Discrete(3)
@@ -445,6 +449,9 @@ class Trading_Environment_Basic(gym.Env):
         elif mapped_action == -1:  # Selling
             reward = -log_return
 
+        # Apply leverage to the base reward
+        reward = reward * self.leverage
+
         # Calculate cost based on action and current position
         if mapped_action != self.current_position:
             if mapped_action == 0:
@@ -453,47 +460,98 @@ class Trading_Environment_Basic(gym.Env):
                 provision = math.log(1 - 2 * self.provision)  # double the provision as it is applied on open and close of position (in this approach we take provision for both open and close on opening) in order to agent have higher rewards for deciding to 0 position
         else:
             provision = 0
+
         reward += provision
 
         # Update the balance
-        self.balance *= math.exp(reward)  # Update balance using exponential of reward
+        self.balance *= math.exp(reward)  # Update balance using exponential of reward before applying other penalties
 
         # Update current position and step
         self.current_position = mapped_action
         self.current_step += 1
 
+        # Update holding duration
+        if mapped_action == self.current_position and mapped_action != 0:
+            self.holding_duration += 1
+        else:
+            self.holding_duration = 0  # Reset if the position changes or goes to 0
+
+        # Calculate holding penalty
+        if self.holding_duration > 10:
+            holding_penalty = -0.0001 * self.holding_duration
+
+        else:
+            holding_penalty = 0
+
+        # calculate reward with other penalties
+        final_reward = reward + holding_penalty
+
+        #  final_reward = np.tanh(final_reward)  # Apply tanh to bound rewards between -1 and 1
+        final_reward = 1 if final_reward > 0 else -1
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
             self.done = True
 
-        return self._next_observation(), reward, self.done, {}
+        return self._next_observation(), final_reward, self.done, {}
 
-    def render(self, mode='human'):
-        if mode == 'human':
-            window_start = max(0, self.current_step - self.look_back)
-            window_end = self.current_step + 1
-            plt.figure(figsize=(10, 6))
+def generate_sinusoidal_data(currencies, start_date, end_date, period_years=3, noise_level=0.01):
+    total_days = pd.to_datetime(end_date) - pd.to_datetime(start_date)
+    total_days = total_days.days
+    freq = 1 / (365 * period_years)
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    time_series = np.linspace(0, 2 * np.pi * freq * total_days, len(date_range))
+    sinusoidal_data = pd.DataFrame(index=date_range)
 
-            # Plotting the price data
-            plt.plot(self.df[('Close', self.tradable_markets)].iloc[window_start:window_end], label='Close Price')
+    for currency in currencies:
+        sinusoidal_values = np.sin(time_series)
+        noise = np.random.normal(scale=noise_level, size=len(date_range))/10000
 
-            # Highlighting the current position: Buy (1), Sell (-1), Hold (0)
-            if self.current_position == 1:
-                plt.scatter(self.current_step, self.df[('Close', self.tradable_markets)].iloc[self.current_step],
-                            color='green', label='Buy')
-            elif self.current_position == -1:
-                plt.scatter(self.current_step, self.df[('Close', self.tradable_markets)].iloc[self.current_step],
-                            color='red', label='Sell')
+        # Adding noise to the sinusoidal values
+        noisy_sinusoidal_values = sinusoidal_values + noise
 
-            plt.title('Trading Environment State')
-            plt.xlabel('Time Step')
-            plt.ylabel('Price')
-            plt.legend()
-            plt.show()
+        temp_df = pd.DataFrame({
+            ('Open', currency): 10 + noisy_sinusoidal_values,
+            ('High', currency): 10 + noisy_sinusoidal_values + 1.05 * noise,  # Adding noise to High
+            ('Low', currency): 10 + noisy_sinusoidal_values - 1.05 * noise,   # Adding noise to Low
+            ('Close', currency): 10 + noisy_sinusoidal_values + noise       # Adding noise to Close
+        }, index=date_range)
+
+        sinusoidal_data = pd.concat([sinusoidal_data, temp_df], axis=1)
+
+    sinusoidal_data.columns = pd.MultiIndex.from_tuples(sinusoidal_data.columns, names=[None, 'Currency'])
+
+    return sinusoidal_data
 
 
-# Example usage
-df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '4H')
+def generate_linear_data(currencies, start_date, end_date, noise_level=0.01):
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+
+    # Creating a linear line from 1 to 2 over the time frame
+    linear_values = np.linspace(1, 2, len(date_range))
+
+    linear_data = pd.DataFrame(index=date_range)
+
+    for currency in currencies:
+        noise = np.random.normal(scale=noise_level, size=len(date_range))
+
+        # Adding noise to the linear values
+        noisy_linear_values = linear_values + noise
+
+        temp_df = pd.DataFrame({
+            ('Open', currency): noisy_linear_values,
+            ('High', currency): noisy_linear_values + 0.05 * noise,  # Adding noise to High
+            ('Low', currency): noisy_linear_values - 0.05 * noise,  # Adding noise to Low
+            ('Close', currency): noisy_linear_values  # Assuming Close is the same as the noisy linear value
+        }, index=date_range)
+
+        linear_data = pd.concat([linear_data, temp_df], axis=1)
+
+    linear_data.columns = pd.MultiIndex.from_tuples(linear_data.columns, names=[None, 'Currency'])
+
+    return linear_data
+
+
+df = generate_linear_data(["EURUSD"],'2013-01-01', '2023-01-01', 0.0001)
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -501,8 +559,9 @@ indicators = [
 
 ]
 add_indicators(df, indicators)
+df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2016-01-01'
+start_date = '2013-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -510,27 +569,26 @@ df_validation = df[validation_date:test_date]
 df_test = df[test_date:]
 
 variables = [
-    {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-    {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
+    {"variable": ("Close", "EURUSD"), "edit": "None"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 
-window_size = '6M'
-look_back = 30
+window_size = '1Y'
+look_back = 10
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 batch_size = 2048
 epochs = 20  # 40
-mini_batch_size = 128
+mini_batch_size = 64
+leverage = 1
 starting_balance = 10000
 # Create the environment
-env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance)
+env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.8,
-                  alpha=0.005,
+                  alpha=0.001,
                   gae_lambda=0.8,
                   policy_clip=0.2,
                   entropy_coefficient=0.01,
@@ -538,25 +596,28 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size)
 
-num_episodes = 5  # 100
+num_episodes = 50  # 100
 
 total_rewards = []
 episode_durations = []
 total_balances = []
 index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
-columns = ['Final Balance']
+columns = ['Final Balance', 'Dataset Index']
 backtest_results = pd.DataFrame(index=index, columns=columns)
 
 # Assuming df_train is your DataFrame
 rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
 
+# Use 'cycle' to endlessly iterate over the rolling_datasets
+dataset_iterator = cycle(rolling_datasets)
+
 for episode in tqdm(range(num_episodes)):
-    # Randomly select one dataset from the rolling datasets
-    window_df = random.choice(rolling_datasets)
+    window_df = next(dataset_iterator)
+    dataset_index = episode % len(rolling_datasets)
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance)
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
     observation = env.reset()
     done = False
@@ -583,15 +644,19 @@ for episode in tqdm(range(num_episodes)):
     total_balances.append(env.balance)
 
     # Backtesting
-    validation_balance = generate_predictions_and_backtest(df_validation, agent, 'EURUSD', look_back, variables, True, provision, initial_balance=starting_balance)
-    test_balance = generate_predictions_and_backtest(df_test, agent, 'EURUSD', look_back, variables, True, provision, initial_balance=starting_balance)
+    validation_balance, validation_number_of_trades = generate_predictions_and_backtest(df_validation, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage)
+    test_balance, test_number_of_trades = generate_predictions_and_backtest(df_test, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage)
     backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
     backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
+    backtest_results.loc[(episode, 'validation'), 'Number of Trades'] = validation_number_of_trades
+    backtest_results.loc[(episode, 'test'), 'Number of Trades'] = test_number_of_trades
+    backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
+    backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
 
     print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
     print("-----------------------------------")
 
-
+# Print the backtest results
 print(backtest_results)
 
 # Plotting the results after all episodes
@@ -609,14 +674,14 @@ plt.show()
 plt.plot(episode_durations, color='red')
 plt.title('Episode Duration Over Episodes')
 plt.xlabel('Episode')
-plt.ylabel('Total Reward')
+plt.ylabel('Total Episode Duration')
 plt.show()
 
 # Plotting the results after all episodes
 plt.plot(total_balances, color='green')
 plt.title('Total Balance Over Episodes')
 plt.xlabel('Episode')
-plt.ylabel('Total Reward')
+plt.ylabel('Total Balance')
 plt.show()
 
 # Extracting data for plotting

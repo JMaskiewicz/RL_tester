@@ -1,5 +1,5 @@
 """
-deterministic data set to check if the model is able to learn to trade on up/sinusoidal data set with very minor noise
+the newest version of Proximal Policy Optimization agent with LSTM
 
 """
 import numpy as np
@@ -135,16 +135,16 @@ class SelfAttention(nn.Module):
     def __init__(self, hidden_size):
         super(SelfAttention, self).__init__()
         self.projection = nn.Sequential(
-            nn.Linear(hidden_size, 64),
+            nn.Linear(hidden_size, 512),
             nn.ReLU(True),
             nn.Dropout(1/16),
-            nn.Linear(64, 32),
+            nn.Linear(512, 256),
             nn.ReLU(True),
             nn.Dropout(1/16),
-            nn.Linear(32, 16),
+            nn.Linear(256, 128),
             nn.ReLU(True),
             nn.Dropout(1/16),
-            nn.Linear(16, 1)
+            nn.Linear(128, 1)
         )
 
     def forward(self, lstm_output):
@@ -155,7 +155,7 @@ class SelfAttention(nn.Module):
 
 
 class LSTM_NetworkBase(nn.Module):
-    def __init__(self, input_dims, static_dim, hidden_size=64, n_layers=2):
+    def __init__(self, input_dims, static_dim, hidden_size=1024, n_layers=2):
         super(LSTM_NetworkBase, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size,
                             batch_first=True, num_layers=n_layers, dropout=0.2)
@@ -178,23 +178,23 @@ class LSTM_NetworkBase(nn.Module):
         return attention_output
 
 class LSTM_ActorNetwork(LSTM_NetworkBase):
-    def __init__(self, n_actions, input_dims, static_dim, hidden_size=64):
+    def __init__(self, n_actions, input_dims, static_dim, hidden_size=1024):
         super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 64),
+            nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(64, 32),
+            nn.Linear(1024, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(32, 32),
+            nn.Linear(512, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(32, 16),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Dropout(1/16)
         )
-        self.policy = nn.Linear(16, n_actions)
+        self.policy = nn.Linear(256, n_actions)
 
     def forward(self, state, static_input):
         attention_output = super().forward(state, static_input).squeeze(0)
@@ -203,23 +203,23 @@ class LSTM_ActorNetwork(LSTM_NetworkBase):
         return action_probs
 
 class LSTM_CriticNetwork(LSTM_NetworkBase):
-    def __init__(self, input_dims, static_dim, hidden_size=64):
+    def __init__(self, input_dims, static_dim, hidden_size=1024):
         super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 64),
+            nn.Linear(hidden_size + static_dim, 1024),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(64, 32),
+            nn.Linear(1024, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(32, 32),
+            nn.Linear(512, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(32, 16),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Dropout(1/16)
         )
-        self.value = nn.Linear(16, 1)
+        self.value = nn.Linear(256, 1)
 
     def forward(self, state, static_input):
         attention_output = super().forward(state, static_input).squeeze(0)
@@ -473,77 +473,21 @@ class Trading_Environment_Basic(gym.Env):
             holding_penalty = 0
 
         # calculate reward with other penalties
-        final_reward = reward  # + holding_penalty
+        final_reward = reward * 100 + holding_penalty
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
             self.done = True
         return self._next_observation(), final_reward, self.done, {}
 
+
 # Example usage
 # Stock market variables
-def generate_sinusoidal_data(currencies, start_date, end_date, period_years=3, noise_level=0.01):
-    total_days = pd.to_datetime(end_date) - pd.to_datetime(start_date)
-    total_days = total_days.days
-    freq = 1 / (365 * period_years)
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-    time_series = np.linspace(0, 2 * np.pi * freq * total_days, len(date_range))
-    sinusoidal_data = pd.DataFrame(index=date_range)
-
-    for currency in currencies:
-        sinusoidal_values = np.sin(time_series)
-        noise = np.random.normal(scale=noise_level, size=len(date_range))/10000
-
-        # Adding noise to the sinusoidal values
-        noisy_sinusoidal_values = sinusoidal_values + noise
-
-        temp_df = pd.DataFrame({
-            ('Open', currency): 10 + noisy_sinusoidal_values,
-            ('High', currency): 10 + noisy_sinusoidal_values + 1.05 * noise,  # Adding noise to High
-            ('Low', currency): 10 + noisy_sinusoidal_values - 1.05 * noise,   # Adding noise to Low
-            ('Close', currency): 10 + noisy_sinusoidal_values + noise       # Adding noise to Close
-        }, index=date_range)
-
-        sinusoidal_data = pd.concat([sinusoidal_data, temp_df], axis=1)
-
-    sinusoidal_data.columns = pd.MultiIndex.from_tuples(sinusoidal_data.columns, names=[None, 'Currency'])
-
-    return sinusoidal_data
-
-
-def generate_linear_data(currencies, start_date, end_date, noise_level=0.01):
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-
-    # Creating a linear line from 1 to 2 over the time frame
-    linear_values = np.linspace(1, 2, len(date_range))
-
-    linear_data = pd.DataFrame(index=date_range)
-
-    for currency in currencies:
-        noise = np.random.normal(scale=noise_level, size=len(date_range))
-
-        # Adding noise to the linear values
-        noisy_linear_values = linear_values + noise
-
-        temp_df = pd.DataFrame({
-            ('Open', currency): noisy_linear_values,
-            ('High', currency): noisy_linear_values + 0.05 * noise,  # Adding noise to High
-            ('Low', currency): noisy_linear_values - 0.05 * noise,  # Adding noise to Low
-            ('Close', currency): noisy_linear_values  # Assuming Close is the same as the noisy linear value
-        }, index=date_range)
-
-        linear_data = pd.concat([linear_data, temp_df], axis=1)
-
-    linear_data.columns = pd.MultiIndex.from_tuples(linear_data.columns, names=[None, 'Currency'])
-
-    return linear_data
-
-
-df = generate_linear_data(["EURUSD"],'2013-01-01', '2023-01-01', 0.0001)
+df = load_data(['EURUSD'], '1D')
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-    {"indicator": "ATR", "mkf": "EURUSD", "length": 24},]
+    {"indicator": "ATR", "mkf": "EURUSD", "length": 28},]
 
 add_indicators(df, indicators)
 
@@ -556,20 +500,20 @@ df_train = df[start_date:validation_date]
 df_validation = df[validation_date:test_date]
 df_test = df[test_date:]
 variables = [
-    {"variable": ("Close", "EURUSD"), "edit": "None"},
-    #{"variable": ("RSI_14", "EURUSD"), "edit": "None"},
-    #{"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+    {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
+    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 10
-provision = 0.000000000001  # 0.001, cant be too high as it would not learn to trade
+look_back = 20
+provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 512
-epochs = 30
-mini_batch_size = 64
+batch_size = 2048
+epochs = 10
+mini_batch_size = 32
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
@@ -578,18 +522,18 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
-                  gamma=0.8,
-                  alpha=0.0001,  # lower learning rate
+                  gamma=0.5,
+                  alpha=0.001,  # lower learning rate
                   gae_lambda=0.8,
                   policy_clip=0.2,
-                  entropy_coefficient=0.001,  # maybe try higher entropy coefficient
+                  entropy_coefficient=0.1,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 100  # 250
+num_episodes = 10  # 250
 
 total_rewards = []
 episode_durations = []
@@ -630,7 +574,7 @@ for episode in tqdm(range(num_episodes)):
         cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if len(agent.memory.states) >= agent.memory.batch_size:
+        if len(agent.memory.states) >= agent.memory.batch_size or done:
             agent.learn()
             agent.memory.clear_memory()
 
