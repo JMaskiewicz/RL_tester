@@ -1,6 +1,7 @@
 """
-the newest version of Proximal Policy Optimization agent with LSTM
-
+Second version of Proximal Policy Optimization (PPO) with Long Short-Term Memory (LSTM) network
+- reward is the key to learning, if the reward is too close to 0 (reward when agent decide to be out of market), the agent will not learn
+-
 """
 import numpy as np
 import pandas as pd
@@ -15,16 +16,19 @@ import gym
 from gym import spaces
 from itertools import cycle
 import torch.nn.functional as F
+from concurrent.futures import ThreadPoolExecutor
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
 from data.edit import normalize_data, standardize_data
+import backtest.backtest_functions.functions as BF
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
+
 
 # TODO add proper backtest function
 def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000,
@@ -80,17 +84,20 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
 
         reward += provision_cost
 
+        # Update the balance
+        balance *= math.exp(reward)
+
         # Scale the reward
         scaled_reward = reward * 100
         total_reward += scaled_reward  # Accumulate total reward
-
-        # Update the balance
-        balance *= math.exp(scaled_reward)
 
         # Update current position
         current_position = action
 
     return balance, total_reward, number_of_trades
+
+def backtest_wrapper(df, agent, mkf, look_back, variables, provision, initial_balance, leverage):
+    return generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision, initial_balance, leverage)
 
 
 # TODO use deque instead of list
@@ -145,16 +152,16 @@ class SelfAttention(nn.Module):
     def __init__(self, hidden_size):
         super(SelfAttention, self).__init__()
         self.projection = nn.Sequential(
-            nn.Linear(hidden_size, 512),
+            nn.Linear(hidden_size, 1024),
+            nn.ReLU(True),
+            nn.Dropout(1/16),
+            nn.Linear(1024, 512),
             nn.ReLU(True),
             nn.Dropout(1/16),
             nn.Linear(512, 256),
             nn.ReLU(True),
             nn.Dropout(1/16),
-            nn.Linear(256, 128),
-            nn.ReLU(True),
-            nn.Dropout(1/16),
-            nn.Linear(128, 1)
+            nn.Linear(256, 1)
         )
 
     def forward(self, lstm_output):
@@ -188,16 +195,16 @@ class LSTM_NetworkBase(nn.Module):
         return attention_output
 
 class LSTM_ActorNetwork(LSTM_NetworkBase):
-    def __init__(self, n_actions, input_dims, static_dim, hidden_size=1024):
+    def __init__(self, n_actions, input_dims, static_dim, hidden_size=2048):
         super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 1024),
+            nn.Linear(hidden_size + static_dim, 2048),
+            nn.ReLU(),
+            nn.Dropout(1/16),
+            nn.Linear(2048, 1024),
             nn.ReLU(),
             nn.Dropout(1/16),
             nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(512, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
             nn.Linear(512, 256),
@@ -213,16 +220,16 @@ class LSTM_ActorNetwork(LSTM_NetworkBase):
         return action_probs
 
 class LSTM_CriticNetwork(LSTM_NetworkBase):
-    def __init__(self, input_dims, static_dim, hidden_size=1024):
+    def __init__(self, input_dims, static_dim, hidden_size=2048):
         super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 1024),
+            nn.Linear(hidden_size + static_dim, 2048),
+            nn.ReLU(),
+            nn.Dropout(1/16),
+            nn.Linear(2048, 1024),
             nn.ReLU(),
             nn.Dropout(1/16),
             nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(512, 512),
             nn.ReLU(),
             nn.Dropout(1/16),
             nn.Linear(512, 256),
@@ -477,7 +484,7 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward * 100
+        final_reward = reward * 200
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -517,15 +524,15 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 20
-provision = 0.01  # 0.001, cant be too high as it would not learn to trade
+look_back = 10
+provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
 epochs = 40
 mini_batch_size = 32
 leverage = 1
-weight_decay = 0.0005
+weight_decay = 0.005
 l1_lambda = 1e-5
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -533,21 +540,22 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.001,  # lower learning rate
-                  gae_lambda=0.8,
-                  policy_clip=0.1,
-                  entropy_coefficient=0.001,  # maybe try higher entropy coefficient
+                  alpha=0.005,  # lower learning rate
+                  gae_lambda=0.9,
+                  policy_clip=0.15,
+                  entropy_coefficient=0.05,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 3  # 250
+num_episodes = 130  # 250
 
 total_rewards = []
 episode_durations = []
 total_balances = []
+episode_probabilities = {'train': [], 'validation': [], 'test': []}
 
 # Assuming df_train is your DataFrame
 rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
@@ -588,15 +596,17 @@ for episode in tqdm(range(num_episodes)):
             agent.learn()
             agent.memory.clear_memory()
 
-    end_time = time.time()
-    episode_time = end_time - start_time
-    total_rewards.append(cumulative_reward)
-    episode_durations.append(episode_time)
-    total_balances.append(env.balance)
+    # Backtesting in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        validation_future = executor.submit(backtest_wrapper, df_validation, agent, 'EURUSD', look_back, variables,
+                                            provision, starting_balance, leverage)
+        test_future = executor.submit(backtest_wrapper, df_test, agent, 'EURUSD', look_back, variables, provision,
+                                      starting_balance, leverage)
 
-    # Backtesting
-    validation_balance, validation_total_rewards, validation_number_of_trades = generate_predictions_and_backtest(df_validation, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage)
-    test_balance, test_total_rewards, test_number_of_trades = generate_predictions_and_backtest(df_test, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage)
+        # Retrieve results
+        validation_balance, validation_total_rewards, validation_number_of_trades = validation_future.result()
+        test_balance, test_total_rewards, test_number_of_trades = test_future.result()
+
     backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
     backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
     backtest_results.loc[(episode, 'validation'), 'Final Reward'] = validation_total_rewards
@@ -605,6 +615,27 @@ for episode in tqdm(range(num_episodes)):
     backtest_results.loc[(episode, 'test'), 'Number of Trades'] = test_number_of_trades
     backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
     backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
+
+    # calculate probabilities
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_train = executor.submit(BF.calculate_probabilities_wrapper, window_df, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
+        future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+
+        train_probs = future_train.result()
+        validation_probs = future_validation.result()
+        test_probs = future_test.result()
+
+    episode_probabilities['train'].append(train_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
+    episode_probabilities['validation'].append(validation_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
+    episode_probabilities['test'].append(test_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
+
+    # results
+    end_time = time.time()
+    episode_time = end_time - start_time
+    total_rewards.append(cumulative_reward)
+    episode_durations.append(episode_time)
+    total_balances.append(env.balance)
 
     print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
     print("-----------------------------------")
@@ -622,14 +653,12 @@ plt.xlabel('Episode')
 plt.ylabel('Total Reward')
 plt.show()
 
-# Plotting the results after all episodes
 plt.plot(episode_durations, color='red')
 plt.title('Episode Duration Over Episodes')
 plt.xlabel('Episode')
 plt.ylabel('Total Episode Duration')
 plt.show()
 
-# Plotting the results after all episodes
 plt.plot(total_balances, color='green')
 plt.title('Total Balance Over Episodes')
 plt.xlabel('Episode')
@@ -652,93 +681,105 @@ plt.legend()
 plt.show()
 
 # final prediction agent
-# Validation
-df_validation_probs = df_validation.copy()
-predictions_df = pd.DataFrame(index=df_validation.index, columns=['Predicted_Action'])
-validation_env = Trading_Environment_Basic(df_validation, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+# predictions and probabilities for train, validation and test calculated in parallel
+with ThreadPoolExecutor() as executor:
+    futures = []
+    datasets = [df_train, df_validation, df_test]
+    for df in datasets:
+        futures.append(executor.submit(BF.process_dataset, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
 
-for validation_observation in range(len(df_validation) - validation_env.look_back):
-    observation = validation_env.reset(validation_observation)
-    action = agent.choose_best_action(observation)
-    predictions_df.iloc[validation_observation + validation_env.look_back] = action
+    results = [future.result() for future in futures]
 
-# Merge with df_validation
-df_validation_with_predictions = df_validation.copy()
-df_validation_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+# Unpack results
+df_train_with_predictions, df_train_with_probabilities = results[0]
+df_validation_with_predictions, df_validation_with_probabilities = results[1]
+df_test_with_predictions, df_test_with_probabilities = results[2]
 
-# final prediction with probabilities
-validation_env_probs = Trading_Environment_Basic(df_validation_probs, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-action_probabilities = []
+# ploting probabilities
+plt.figure(figsize=(16, 6))
+plt.plot(df_validation_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_validation_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_validation_with_probabilities['Long'], label='Long', color='green')
 
-for validation_observation in range(len(df_validation_probs) - validation_env_probs.look_back):
-    observation = validation_env_probs.reset(validation_observation)  # Reset environment to the specific observation
-    probs = agent.get_action_probabilities(observation)
-    action_probabilities.append(probs[0])
+plt.title('Action Probabilities Over Time for Validation Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
 
-# Convert the list of probabilities to a DataFrame
-probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_nothing', 'Long'])
+plt.figure(figsize=(16, 6))
+plt.plot(df_train_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_train_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_train_with_probabilities['Long'], label='Long', color='green')
 
-# Join with the original validation DataFrame
-df_validation_with_probabilities = df_validation_probs.iloc[validation_env_probs.look_back:].reset_index(drop=True)
-df_validation_with_probabilities = pd.concat([df_validation_with_probabilities, probabilities_df], axis=1)
+plt.title('Action Probabilities Over Time for Train Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
 
-# TEST
-df_test_probs = df_test.copy()
-predictions_df = pd.DataFrame(index=df_test.index, columns=['Predicted_Action'])
-test_env = Trading_Environment_Basic(df_test, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+plt.figure(figsize=(16, 6))
+plt.plot(df_test_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_test_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_test_with_probabilities['Long'], label='Long', color='green')
 
-for test_observation in range(len(df_test) - test_env.look_back):
-    observation = test_env.reset(test_observation)
-    action = agent.choose_best_action(observation)
-    predictions_df.iloc[test_observation + test_env.look_back] = action
+plt.title('Action Probabilities Over Time for Test Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
 
-# Merge with df_test
-df_test_with_predictions = df_test.copy()
-df_test_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+###
 
+import dash
+from dash import dcc, html
+import plotly.graph_objects as go
+from dash.dependencies import Input, Output
 
-# final prediction with probabilities
-test_env_probs = Trading_Environment_Basic(df_test_probs, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-action_probabilities = []
+# Initialize Dash app
+app = dash.Dash(__name__)
 
-for test_observation in range(len(df_test_probs) - test_env_probs.look_back):
-    observation = test_env_probs.reset(test_observation)  # Reset environment to the specific observation
-    probs = agent.get_action_probabilities(observation)
-    action_probabilities.append(probs[0])
+# App layout
+app.layout = html.Div([
+    dcc.Dropdown(
+        id='dataset-dropdown',
+        options=[
+            {'label': 'Train', 'value': 'train'},
+            {'label': 'Validation', 'value': 'validation'},
+            {'label': 'Test', 'value': 'test'}
+        ],
+        value='train'
+    ),
+    dcc.Input(id='episode-input', type='number', value=0, min=0, step=1),
+    dcc.Graph(id='probability-plot')
+])
 
-# Convert the list of probabilities to a DataFrame
-probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_nothing', 'Long'])
+# Callback to update graph
+@app.callback(
+    Output('probability-plot', 'figure'),
+    [Input('dataset-dropdown', 'value'), Input('episode-input', 'value')]
+)
+def update_graph(selected_dataset, selected_episode):
+    data = episode_probabilities[selected_dataset][selected_episode]
+    x_values = list(range(len(data['Short'])))
 
-# Join with the original test DataFrame
-df_test_with_probabilities = df_test_probs.iloc[test_env_probs.look_back:].reset_index(drop=True)
-df_test_with_probabilities = pd.concat([df_test_with_probabilities, probabilities_df], axis=1)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x_values, y=data['Short'], mode='lines', name='Short'))
+    fig.add_trace(go.Scatter(x=x_values, y=data['Do_nothing'], mode='lines', name='Do Nothing'))
+    fig.add_trace(go.Scatter(x=x_values, y=data['Long'], mode='lines', name='Long'))
 
-# TRAIN
-df_train_probs = df_train.copy()
-predictions_df = pd.DataFrame(index=df_train.index, columns=['Predicted_Action'])
-train_env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    fig.update_layout(title='Action Probabilities Over Episodes',
+                      xaxis_title='Time',
+                      yaxis_title='Probability')
+    return fig
 
-for train_observation in range(len(df_train) - train_env.look_back):
-    observation = train_env.reset(train_observation)
-    action = agent.choose_best_action(observation)
-    predictions_df.iloc[train_observation + train_env.look_back] = action
+app.run_server(debug=True)
 
-# Merge with df_train
-df_train_with_predictions = df_train.copy()
-df_train_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+import webbrowser
 
+# Open the web browser
+webbrowser.open("http://127.0.0.1:8050/")
 
-train_env_probs = Trading_Environment_Basic(df_train_probs, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-action_probabilities = []
+# http://127.0.0.1:8050/
 
-for train_observation in range(len(df_train_probs) - train_env_probs.look_back):
-    observation = train_env_probs.reset(train_observation)  # Reset environment to the specific observation
-    probs = agent.get_action_probabilities(observation)
-    action_probabilities.append(probs[0])
-
-# Convert the list of probabilities to a DataFrame
-probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_nothing', 'Long'])
-
-# Join with the original train DataFrame
-df_train_with_probabilities = df_train_probs.iloc[train_env_probs.look_back:].reset_index(drop=True)
-df_train_with_probabilities = pd.concat([df_train_with_probabilities, probabilities_df], axis=1)
+print('end')

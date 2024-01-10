@@ -154,13 +154,13 @@ class SelfAttention(nn.Module):
         self.projection = nn.Sequential(
             nn.Linear(hidden_size, 1024),
             nn.ReLU(True),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(1024, 512),
             nn.ReLU(True),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(512, 256),
             nn.ReLU(True),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(256, 1)
         )
 
@@ -200,16 +200,16 @@ class LSTM_ActorNetwork(LSTM_NetworkBase):
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 2048),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(2048, 1024),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(1024, 512),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(1/16)
+            nn.Dropout(1/8)
         )
         self.policy = nn.Linear(256, n_actions)
 
@@ -225,16 +225,16 @@ class LSTM_CriticNetwork(LSTM_NetworkBase):
         self.fc1 = nn.Sequential(
             nn.Linear(hidden_size + static_dim, 2048),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(2048, 1024),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(1024, 512),
             nn.ReLU(),
-            nn.Dropout(1/16),
+            nn.Dropout(1/8),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(1/16)
+            nn.Dropout(1/8)
         )
         self.value = nn.Linear(256, 1)
 
@@ -484,7 +484,7 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward * 200
+        final_reward = reward * 100
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -529,10 +529,10 @@ provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40
+epochs = 1
 mini_batch_size = 32
 leverage = 1
-weight_decay = 0.005
+weight_decay = 0.0005
 l1_lambda = 1e-5
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -540,17 +540,17 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.005,  # lower learning rate
-                  gae_lambda=0.9,
+                  alpha=0.001,  # lower learning rate
+                  gae_lambda=0.8,
                   policy_clip=0.15,
-                  entropy_coefficient=0.05,  # maybe try higher entropy coefficient
+                  entropy_coefficient=0.01,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 130  # 250
+num_episodes = 5  # 250
 
 total_rewards = []
 episode_durations = []
@@ -774,11 +774,6 @@ def update_graph(selected_dataset, selected_episode):
     return fig
 
 app.run_server(debug=True)
-
-import webbrowser
-
-# Open the web browser
-webbrowser.open("http://127.0.0.1:8050/")
 
 # http://127.0.0.1:8050/
 

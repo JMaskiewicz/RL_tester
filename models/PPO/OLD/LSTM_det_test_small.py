@@ -473,7 +473,7 @@ class Trading_Environment_Basic(gym.Env):
             holding_penalty = 0
 
         # calculate reward with other penalties
-        final_reward = reward * 100000  # + holding_penalty
+        final_reward = reward * 100  # + holding_penalty
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -539,7 +539,7 @@ def generate_linear_data(currencies, start_date, end_date, noise_level=0.01):
     return linear_data
 
 
-df = generate_linear_data(["EURUSD"],'2013-01-01', '2023-01-01', 0.0001)
+df = generate_sinusoidal_data(["EURUSD"],'2013-01-01', '2023-01-01', 3)
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -568,7 +568,7 @@ provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 512
-epochs = 20
+epochs = 50
 mini_batch_size = 64
 leverage = 1
 weight_decay = 0.0005
@@ -589,7 +589,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 30  # 250
+num_episodes = 1000  # 250
 
 total_rewards = []
 episode_durations = []
