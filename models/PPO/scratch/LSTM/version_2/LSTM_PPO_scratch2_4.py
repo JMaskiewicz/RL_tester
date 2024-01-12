@@ -530,7 +530,7 @@ provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40
+epochs = 2
 mini_batch_size = 32
 leverage = 1
 weight_decay = 0.005
@@ -543,7 +543,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   gamma=0.9,
                   alpha=0.005,  # lower learning rate
                   gae_lambda=0.9,
-                  policy_clip=0.15,
+                  policy_clip=0.1,
                   entropy_coefficient=0.05,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
@@ -551,7 +551,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 130  # 250
+num_episodes = 1800  # 250
 
 total_rewards = []
 episode_durations = []
@@ -776,12 +776,12 @@ def update_graph(selected_dataset, selected_episode):
 
     return fig
 
-app.run_server(debug=True, port=8050)
+app.run_server(debug=True, port=8051)
 
 import webbrowser
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8050/")
+webbrowser.open("http://127.0.0.1:8051/")
 
 # http://127.0.0.1:8050/
 

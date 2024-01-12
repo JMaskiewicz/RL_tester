@@ -106,7 +106,6 @@ class LSTM_ActorNetwork(nn.Module):
 class LSTM_CriticNetwork(nn.Module):
     def __init__(self, input_dims, hidden_size=128):
         super(LSTM_CriticNetwork, self).__init__()
-        self.self_attention = SelfAttention(hidden_size)
 
         # LSTM layer
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size, batch_first=True)
@@ -117,9 +116,11 @@ class LSTM_CriticNetwork(nn.Module):
     def forward(self, state):
         # Assuming state shape is [batch, sequence, features]
         lstm_output, (hidden, cell) = self.lstm(state)
-        attention_output, weights = self.self_attention(lstm_output)
 
-        value = self.value(attention_output)
+        # Use only the last output of the sequence for value estimation
+        last_output = lstm_output[:, -1, :]
+
+        value = self.value(last_output)
         return value
 
 
@@ -403,7 +404,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 10  # 100
+num_episodes = 1  # 100
 
 total_rewards = []
 episode_durations = []

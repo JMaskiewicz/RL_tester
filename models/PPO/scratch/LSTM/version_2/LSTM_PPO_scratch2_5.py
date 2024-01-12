@@ -195,6 +195,7 @@ class LSTM_NetworkBase(nn.Module):
 
         return attention_output
 
+
 class LSTM_ActorNetwork(LSTM_NetworkBase):
     def __init__(self, n_actions, input_dims, static_dim, hidden_size=2048):
         super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
@@ -219,6 +220,7 @@ class LSTM_ActorNetwork(LSTM_NetworkBase):
         x = self.fc1(attention_output)
         action_probs = torch.softmax(self.policy(x), dim=-1)
         return action_probs
+
 
 class LSTM_CriticNetwork(LSTM_NetworkBase):
     def __init__(self, input_dims, static_dim, hidden_size=2048):
@@ -485,7 +487,7 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward * 200
+        final_reward = reward * 100
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -517,20 +519,16 @@ df_validation = df[validation_date:test_date]
 df_test = df[test_date:]
 variables = [
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 10
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+provision = 0  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40
+epochs = 1
 mini_batch_size = 32
 leverage = 1
 weight_decay = 0.005
@@ -541,9 +539,9 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.005,  # lower learning rate
+                  alpha=0.1,  # lower learning rate
                   gae_lambda=0.9,
-                  policy_clip=0.15,
+                  policy_clip=0.9,
                   entropy_coefficient=0.05,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
@@ -551,7 +549,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 130  # 250
+num_episodes = 10  # 250
 
 total_rewards = []
 episode_durations = []
@@ -649,19 +647,19 @@ import matplotlib.pyplot as plt
 
 # Plotting the results after all episodes
 plt.plot(total_rewards)
-plt.title('Total Reward Over Episodes')
+plt.title('Total Reward Over Episodes 3')
 plt.xlabel('Episode')
 plt.ylabel('Total Reward')
 plt.show()
 
 plt.plot(episode_durations, color='red')
-plt.title('Episode Duration Over Episodes')
+plt.title('Episode Duration Over Episodes 3')
 plt.xlabel('Episode')
 plt.ylabel('Total Episode Duration')
 plt.show()
 
 plt.plot(total_balances, color='green')
-plt.title('Total Balance Over Episodes')
+plt.title('Total Balance Over Episodes 3')
 plt.xlabel('Episode')
 plt.ylabel('Total Balance')
 plt.show()
@@ -675,7 +673,7 @@ plt.figure(figsize=(10, 6))
 plt.plot(range(num_episodes), validation_pnl.values, label='Validation Total PnL', marker='o')
 plt.plot(range(num_episodes), test_pnl.values, label='Test Total PnL', marker='x')
 
-plt.title('Total PnL Over Episodes')
+plt.title('Total PnL Over Episodes 3')
 plt.xlabel('Episode')
 plt.ylabel('Total PnL')
 plt.legend()
@@ -702,7 +700,7 @@ plt.plot(df_validation_with_probabilities['Short'], label='Short', color='red')
 plt.plot(df_validation_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
 plt.plot(df_validation_with_probabilities['Long'], label='Long', color='green')
 
-plt.title('Action Probabilities Over Time for Validation Set')
+plt.title('Action Probabilities Over Time for Validation Set 3')
 plt.xlabel('Time')
 plt.ylabel('Probability')
 plt.legend()
@@ -713,7 +711,7 @@ plt.plot(df_train_with_probabilities['Short'], label='Short', color='red')
 plt.plot(df_train_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
 plt.plot(df_train_with_probabilities['Long'], label='Long', color='green')
 
-plt.title('Action Probabilities Over Time for Train Set')
+plt.title('Action Probabilities Over Time for Train Set 3')
 plt.xlabel('Time')
 plt.ylabel('Probability')
 plt.legend()
@@ -724,7 +722,7 @@ plt.plot(df_test_with_probabilities['Short'], label='Short', color='red')
 plt.plot(df_test_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
 plt.plot(df_test_with_probabilities['Long'], label='Long', color='green')
 
-plt.title('Action Probabilities Over Time for Test Set')
+plt.title('Action Probabilities Over Time for Test Set 3')
 plt.xlabel('Time')
 plt.ylabel('Probability')
 plt.legend()
@@ -772,16 +770,16 @@ def update_graph(selected_dataset, selected_episode):
     fig.update_layout(title='Action Probabilities Over Episodes',
                       xaxis_title='Time',
                       yaxis_title='Probability',
-                      yaxis=dict(range=[0, 1]))  # Setting the fixed scale for y-axis
+                      yaxis=dict(range=[0, 1]))
 
     return fig
 
-app.run_server(debug=True, port=8050)
+app.run_server(debug=True, port=8053)
 
 import webbrowser
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8050/")
+webbrowser.open("http://127.0.0.1:8053/")
 
 # http://127.0.0.1:8050/
 

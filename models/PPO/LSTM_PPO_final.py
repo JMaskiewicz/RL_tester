@@ -88,7 +88,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
         balance *= math.exp(reward)
 
         # Scale the reward
-        scaled_reward = reward * 100
+        scaled_reward = reward * 1000
         total_reward += scaled_reward  # Accumulate total reward
 
         # Update current position
@@ -147,36 +147,11 @@ class PPOMemory:
         self.dones = []
         self.vals = []
         self.static_inputs = []
-
-class SelfAttention(nn.Module):
-    def __init__(self, hidden_size):
-        super(SelfAttention, self).__init__()
-        self.projection = nn.Sequential(
-            nn.Linear(hidden_size, 1024),
-            nn.ReLU(True),
-            nn.Dropout(1/16),
-            nn.Linear(1024, 512),
-            nn.ReLU(True),
-            nn.Dropout(1/16),
-            nn.Linear(512, 256),
-            nn.ReLU(True),
-            nn.Dropout(1/16),
-            nn.Linear(256, 1)
-        )
-
-    def forward(self, lstm_output):
-        energy = self.projection(lstm_output)
-        weights = F.softmax(energy, dim=1)
-        outputs = (lstm_output * weights.unsqueeze(-1)).sum(dim=1)
-        return outputs, weights
-
-
 class LSTM_NetworkBase(nn.Module):
     def __init__(self, input_dims, static_dim, hidden_size=1024, n_layers=2):
         super(LSTM_NetworkBase, self).__init__()
         self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size,
                             batch_first=True, num_layers=n_layers, dropout=0.2)
-        self.self_attention = SelfAttention(hidden_size + static_dim)
 
     def forward(self, state, static_input):
         lstm_output, _ = self.lstm(state)
@@ -190,32 +165,24 @@ class LSTM_NetworkBase(nn.Module):
 
         # Combine LSTM output and static input
         combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
-        attention_output, _ = self.self_attention(combined_input)
-
-        return attention_output
+        return combined_input
 
 class LSTM_ActorNetwork(LSTM_NetworkBase):
     def __init__(self, n_actions, input_dims, static_dim, hidden_size=2048):
         super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 2048),
+            nn.Linear(hidden_size + static_dim, 256),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(2048, 1024),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(512, 256),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(1/16)
         )
-        self.policy = nn.Linear(256, n_actions)
+        self.policy = nn.Linear(128, n_actions)
 
     def forward(self, state, static_input):
-        attention_output = super().forward(state, static_input).squeeze(0)
-        x = self.fc1(attention_output)
+        combined_input = super().forward(state, static_input).squeeze(0)
+        x = self.fc1(combined_input)
         action_probs = torch.softmax(self.policy(x), dim=-1)
         return action_probs
 
@@ -223,27 +190,20 @@ class LSTM_CriticNetwork(LSTM_NetworkBase):
     def __init__(self, input_dims, static_dim, hidden_size=2048):
         super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
         self.fc1 = nn.Sequential(
-            nn.Linear(hidden_size + static_dim, 2048),
+            nn.Linear(hidden_size + static_dim, 256),
             nn.ReLU(),
             nn.Dropout(1/16),
-            nn.Linear(2048, 1024),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Dropout(1/16),
-            nn.Linear(512, 256),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(1/16)
         )
-        self.value = nn.Linear(256, 1)
+        self.value = nn.Linear(128, 1)
 
     def forward(self, state, static_input):
-        attention_output = super().forward(state, static_input).squeeze(0)
-        x = self.fc1(attention_output)
+        combined_input = super().forward(state, static_input).squeeze(0)
+        x = self.fc1(combined_input)
         value = self.value(x)
         return value
-
 
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.1, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5):
@@ -475,16 +435,11 @@ class Trading_Environment_Basic(gym.Env):
         self.current_position = mapped_action
         self.current_step += 1
 
-        # Update holding duration
-        if mapped_action == self.current_position and mapped_action != 0:
-            self.holding_duration += 1
-        else:
-            self.holding_duration = 0  # Reset if the position changes or goes to 0
         """
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward * 200
+        final_reward = reward * 1000
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -516,20 +471,16 @@ df_validation = df[validation_date:test_date]
 df_test = df[test_date:]
 variables = [
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-    {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 10
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.01  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40
+epochs = 1
 mini_batch_size = 32
 leverage = 1
 weight_decay = 0.005
@@ -540,17 +491,17 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.005,  # lower learning rate
+                  alpha=0.01,  # lower learning rate
                   gae_lambda=0.9,
-                  policy_clip=0.15,
-                  entropy_coefficient=0.05,  # maybe try higher entropy coefficient
+                  policy_clip=0.2,
+                  entropy_coefficient=0.1,  # maybe try higher entropy coefficient
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 130  # 250
+num_episodes = 150  # 250
 
 total_rewards = []
 episode_durations = []
@@ -618,7 +569,7 @@ for episode in tqdm(range(num_episodes)):
 
     # calculate probabilities
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_train = executor.submit(BF.calculate_probabilities_wrapper, window_df, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_train = executor.submit(BF.calculate_probabilities_wrapper, df_train, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
         future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
         future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
@@ -626,9 +577,9 @@ for episode in tqdm(range(num_episodes)):
         validation_probs = future_validation.result()
         test_probs = future_test.result()
 
-    episode_probabilities['train'].append(train_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
-    episode_probabilities['validation'].append(validation_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
-    episode_probabilities['test'].append(test_probs[['Short', 'Do_nothing', 'Long']].to_dict(orient='list'))
+    episode_probabilities['train'].append(train_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+    episode_probabilities['validation'].append(validation_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+    episode_probabilities['test'].append(test_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
 
     # results
     end_time = time.time()
@@ -698,7 +649,7 @@ df_test_with_predictions, df_test_with_probabilities = results[2]
 # ploting probabilities
 plt.figure(figsize=(16, 6))
 plt.plot(df_validation_with_probabilities['Short'], label='Short', color='red')
-plt.plot(df_validation_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_validation_with_probabilities['Neutral'], label='Neutral', color='blue')
 plt.plot(df_validation_with_probabilities['Long'], label='Long', color='green')
 
 plt.title('Action Probabilities Over Time for Validation Set')
@@ -709,7 +660,7 @@ plt.show()
 
 plt.figure(figsize=(16, 6))
 plt.plot(df_train_with_probabilities['Short'], label='Short', color='red')
-plt.plot(df_train_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_train_with_probabilities['Neutral'], label='Neutral', color='blue')
 plt.plot(df_train_with_probabilities['Long'], label='Long', color='green')
 
 plt.title('Action Probabilities Over Time for Train Set')
@@ -720,7 +671,7 @@ plt.show()
 
 plt.figure(figsize=(16, 6))
 plt.plot(df_test_with_probabilities['Short'], label='Short', color='red')
-plt.plot(df_test_with_probabilities['Do_nothing'], label='Do Nothing', color='blue')
+plt.plot(df_test_with_probabilities['Neutral'], label='Neutral', color='blue')
 plt.plot(df_test_with_probabilities['Long'], label='Long', color='green')
 
 plt.title('Action Probabilities Over Time for Test Set')
@@ -765,7 +716,7 @@ def update_graph(selected_dataset, selected_episode):
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=x_values, y=data['Short'], mode='lines', name='Short'))
-    fig.add_trace(go.Scatter(x=x_values, y=data['Do_nothing'], mode='lines', name='Do Nothing'))
+    fig.add_trace(go.Scatter(x=x_values, y=data['Neutral'], mode='lines', name='Neutral'))
     fig.add_trace(go.Scatter(x=x_values, y=data['Long'], mode='lines', name='Long'))
 
     fig.update_layout(title='Action Probabilities Over Episodes',

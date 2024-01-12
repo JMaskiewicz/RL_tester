@@ -24,7 +24,7 @@ def calculate_probabilities(df, environment_class, agent, look_back, variables, 
         probs = agent.get_action_probabilities(observation)
         action_probabilities.append(probs[0])
 
-    probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Do_nothing', 'Long'])
+    probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
     df_with_probabilities = df.iloc[env.look_back:].reset_index(drop=True)
     df_with_probabilities = pd.concat([df_with_probabilities, probabilities_df], axis=1)
     return df_with_probabilities
