@@ -30,12 +30,9 @@ from data.edit import normalize_data, standardize_data
 import backtest.backtest_functions.functions as BF
 
 # TODO add proper backtest function
-def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000,
-                                      leverage=1):
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
     # Create a validation environment
-    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                               tradable_markets=tradable_markets, provision=provision,
-                                               initial_balance=initial_balance, leverage=leverage)
+    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,tradable_markets=tradable_markets, provision=provision, initial_balance=initial_balance, leverage=leverage)
 
     # Generate Predictions
     predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
@@ -87,7 +84,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
         balance *= math.exp(reward)
 
         # Scale the reward
-        scaled_reward = reward * 100
+        scaled_reward = reward
         total_reward += scaled_reward  # Accumulate total reward
 
         # Update current position
@@ -146,21 +143,17 @@ class PPOMemory:
         self.dones = []
         self.vals = []
 
-# TODO rework network into transformer network
+# TODO rework network into TFT transformer network
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, dropout_rate=0.25):
+    def __init__(self, n_actions, input_dims, dropout_rate=1/16):
         super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, n_actions)
+        self.fc1 = nn.Linear(input_dims, 1024)
+        self.bn1 = nn.BatchNorm1d(1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.bn2 = nn.BatchNorm1d(512)
+        self.fc3 = nn.Linear(512, 256)
+        self.bn3 = nn.BatchNorm1d(256)
+        self.fc4 = nn.Linear(256, n_actions)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
@@ -185,36 +178,20 @@ class ActorNetwork(nn.Module):
         x = self.dropout(x)
 
         x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc6(x)
         x = self.softmax(x)
         return x
 
 # TODO rework network into transformer network
 class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, dropout_rate=0.25):
+    def __init__(self, input_dims, dropout_rate=1/16):
         super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, 1)
+        self.fc1 = nn.Linear(input_dims, 1024)
+        self.bn1 = nn.BatchNorm1d(1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.bn2 = nn.BatchNorm1d(512)
+        self.fc3 = nn.Linear(512, 256)
+        self.bn3 = nn.BatchNorm1d(256)
+        self.fc4 = nn.Linear(256, 1)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -237,19 +214,7 @@ class CriticNetwork(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
 
-        x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        q = self.fc6(x)
+        q = self.fc4(x)
         return q
 
 
@@ -346,7 +311,6 @@ class PPO_Agent:
     def choose_action(self, observation):
         """
         Selects an action based on the current policy and exploration noise.
-
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
@@ -450,7 +414,7 @@ class Trading_Environment_Basic(gym.Env):
                 scaled_data = standardize_data(data)
             elif variable['edit'] == 'normalize':
                 scaled_data = normalize_data(data)
-            else:  # Default to normalization
+            else:  # Default none
                 scaled_data = data
 
             scaled_observation.extend(scaled_data)
@@ -498,12 +462,11 @@ class Trading_Environment_Basic(gym.Env):
         # Update current position and step
         self.current_position = mapped_action
         self.current_step += 1
-
         """
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward * 10
+        final_reward = reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -541,13 +504,13 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 10
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+look_back = 12
+provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 5  # 40
-mini_batch_size = 256
+epochs = 100  # 40
+mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
@@ -555,18 +518,18 @@ l1_lambda = 1e-5
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
-                  gamma=0.8,
-                  alpha=0.01,
-                  gae_lambda=0.8,
-                  policy_clip=0.1,
-                  entropy_coefficient=0.05,
+                  gamma=0.9,
+                  alpha=0.0025,  # learning rate for actor network
+                  gae_lambda=0.8,  # lambda for generalized advantage estimation
+                  policy_clip=0.1,  # clip parameter for PPO
+                  entropy_coefficient=1,  # higher entropy coefficient encourages exploration
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 5  # 100
+num_episodes = 20  # 100
 
 total_rewards = []
 episode_durations = []
@@ -648,14 +611,12 @@ for episode in tqdm(range(num_episodes)):
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
     print("-----------------------------------")
 
 
 print(backtest_results)
-
 # Plotting the results after all episodes
-
 import matplotlib.pyplot as plt
 
 # Plotting the results after all episodes
@@ -707,7 +668,7 @@ df_train_with_predictions, df_train_with_probabilities = results[0]
 df_validation_with_predictions, df_validation_with_probabilities = results[1]
 df_test_with_predictions, df_test_with_probabilities = results[2]
 
-# ploting probabilities
+# plotting probabilities
 plt.figure(figsize=(16, 6))
 plt.plot(df_validation_with_probabilities['Short'], label='Short', color='red')
 plt.plot(df_validation_with_probabilities['Neutral'], label='Neutral', color='blue')
@@ -747,21 +708,33 @@ from dash import dcc, html
 import plotly.graph_objects as go
 from dash.dependencies import Input, Output
 import webbrowser
+import pandas as pd
 
-# Placeholder function to get OHLC data
-# You'll need to define this function based on your data source
-def get_ohlc_data(selected_dataset, selected_episode):
-    # Dummy data - replace this with your actual data retrieval logic
-    import pandas as pd
-    import numpy as np
-    dates = pd.date_range(start='2024-01-01', periods=100, freq='D')
-    return pd.DataFrame({
-        'Time': dates,
-        'Open': np.random.randn(100).cumsum(),
-        'High': np.random.randn(100).cumsum(),
-        'Low': np.random.randn(100).cumsum(),
-        'Close': np.random.randn(100).cumsum()
-    })
+
+def get_ohlc_data(selected_dataset, market):
+    dataset_mapping = {
+        'train': df_train,
+        'validation': df_validation,
+        'test': df_test
+    }
+    data = dataset_mapping[selected_dataset]
+
+    # Construct the column tuples based on the MultiIndex structure
+    ohlc_columns = [('Open', market), ('High', market), ('Low', market), ('Close', market)]
+
+    # Extract the OHLC data for the specified market
+    ohlc_data = data.loc[:, ohlc_columns]
+
+    # Reset index to turn 'Date' into a column
+    ohlc_data = ohlc_data.reset_index()
+
+    # Flatten the MultiIndex for columns, and map each OHLC column correctly
+    ohlc_data.columns = ['Time'] + [col[0] for col in ohlc_data.columns[1:]]
+
+    # Ensure 'Time' column is in datetime format
+    ohlc_data['Time'] = pd.to_datetime(ohlc_data['Time'])
+
+    return ohlc_data
 
 # Initialize Dash app
 app = dash.Dash(__name__)
@@ -779,39 +752,36 @@ app.layout = html.Div([
     ),
     dcc.Input(id='episode-input', type='number', value=0, min=0, step=1),
     dcc.Graph(id='probability-plot'),
-    dcc.Graph(id='ohlc-plot')  # New Graph component for OHLC plot
+    dcc.Graph(id='ohlc-plot')
 ])
 
-# Callback to update graphs
+# Callback for updating the probability plot
 @app.callback(
-    [Output('probability-plot', 'figure'),
-     Output('ohlc-plot', 'figure')],
+    Output('probability-plot', 'figure'),
     [Input('dataset-dropdown', 'value'), Input('episode-input', 'value')]
 )
-def update_graphs(selected_dataset, selected_episode):
-    # Placeholder data for probabilities - replace with your actual data retrieval
-    episode_probabilities = {
-        'train': [{'Short': [0.1], 'Neutral': [0.8], 'Long': [0.1]}],
-        'validation': [{'Short': [0.2], 'Neutral': [0.6], 'Long': [0.2]}],
-        'test': [{'Short': [0.3], 'Neutral': [0.4], 'Long': [0.3]}]
-    }
 
-    # Get probabilities data
+def update_probability_plot(selected_dataset, selected_episode):
     data = episode_probabilities[selected_dataset][selected_episode]
     x_values = list(range(len(data['Short'])))
-
-    # Create probability plot
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=x_values, y=data['Short'], mode='lines', name='Short'))
     fig.add_trace(go.Scatter(x=x_values, y=data['Neutral'], mode='lines', name='Neutral'))
     fig.add_trace(go.Scatter(x=x_values, y=data['Long'], mode='lines', name='Long'))
+    fig.update_layout(title='Action Probabilities Over Episodes', xaxis_title='Time', yaxis_title='Probability', yaxis=dict(range=[0, 1]))
+    return fig
 
-    fig.update_layout(title='Action Probabilities Over Episodes',
-                      xaxis_title='Time',
-                      yaxis_title='Probability')
+@app.callback(
+    Output('ohlc-plot', 'figure'),
+    [Input('dataset-dropdown', 'value')]
+)
 
-    # Get OHLC data
-    ohlc_data = get_ohlc_data(selected_dataset, selected_episode)
+
+def update_ohlc_plot(selected_dataset, market='EURUSD'):
+    ohlc_data = get_ohlc_data(selected_dataset, market)
+
+    if ohlc_data.empty:
+        return go.Figure(layout=go.Layout(title="No OHLC data available."))
 
     # Create OHLC plot
     ohlc_fig = go.Figure(data=[go.Ohlc(
@@ -822,15 +792,45 @@ def update_graphs(selected_dataset, selected_episode):
         close=ohlc_data['Close']
     )])
 
-    ohlc_fig.update_layout(title='OHLC Data',
-                           xaxis_title='Time',
-                           yaxis_title='Price')
+    ohlc_fig.update_layout(title='OHLC Data', xaxis_title='Time', yaxis_title='Price')
 
-    return fig, ohlc_fig
+    return ohlc_fig
 
-app.run_server(debug=True)
+app.run_server(debug=True, port=8055)
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8050/")
+webbrowser.open("http://127.0.0.1:8055/")
+
+# Prepare the example observation
+observation_window = df_train.iloc[60:60+look_back]
+processed_observation = []
+
+for variable in variables:
+    data = observation_window[variable['variable']].values
+    if variable['edit'] == 'standardize':
+        processed_data = standardize_data(data)
+    elif variable['edit'] == 'normalize':
+        processed_data = normalize_data(data)
+    else:
+        processed_data = data
+    processed_observation.extend(processed_data)
+
+# Convert to numpy array
+processed_observation = np.array(processed_observation)
+
+def get_probabilities_for_position(current_position):
+    observation_with_position = np.append(processed_observation, (current_position+1)/2)
+    observation_with_position = observation_with_position.reshape(1, -1)
+    return agent.get_action_probabilities(observation_with_position)
+
+# Get probabilities for each position
+probabilities_short = get_probabilities_for_position(-1)
+probabilities_neutral = get_probabilities_for_position(0)
+probabilities_long = get_probabilities_for_position(1)
+
+# Print or return the results
+print("Probabilities for Short Position:", probabilities_short)
+print("Probabilities for Neutral Position:", probabilities_neutral)
+print("Probabilities for Long Position:", probabilities_long)
 
 print('end')

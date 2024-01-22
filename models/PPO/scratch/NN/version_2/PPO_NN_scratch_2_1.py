@@ -30,12 +30,9 @@ from data.edit import normalize_data, standardize_data
 import backtest.backtest_functions.functions as BF
 
 # TODO add proper backtest function
-def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000,
-                                      leverage=1):
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
     # Create a validation environment
-    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                               tradable_markets=tradable_markets, provision=provision,
-                                               initial_balance=initial_balance, leverage=leverage)
+    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=initial_balance, leverage=leverage)
 
     # Generate Predictions
     predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
@@ -546,7 +543,7 @@ provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 5  # 40
+epochs = 1  # 40
 mini_batch_size = 256
 leverage = 1
 weight_decay = 0.0005
@@ -747,9 +744,35 @@ from dash import dcc, html
 import plotly.graph_objects as go
 from dash.dependencies import Input, Output
 import webbrowser
+import pandas as pd
 
-def get_ohlc_data(selected_dataset, selected_episode):
 
+def get_ohlc_data(selected_dataset, market):
+    dataset_mapping = {
+        'train': df_train,
+        'validation': df_validation,
+        'test': df_test
+    }
+    data = dataset_mapping[selected_dataset]
+
+    # Construct the column tuples based on the MultiIndex structure
+    ohlc_columns = [('Open', market), ('High', market), ('Low', market), ('Close', market)]
+
+    # Extract the OHLC data for the specified market
+    ohlc_data = data.loc[:, ohlc_columns]
+
+    # Reset index to turn 'Date' into a column
+    ohlc_data = ohlc_data.reset_index()
+
+    # Flatten the MultiIndex for columns, and map each OHLC column correctly
+    ohlc_data.columns = ['Time'] + [col[0] for col in ohlc_data.columns[1:]]
+
+    # Ensure 'Time' column is in datetime format
+    ohlc_data['Time'] = pd.to_datetime(ohlc_data['Time'])
+
+    return ohlc_data
+
+x = get_ohlc_data('train', 'EURUSD')
 
 # Initialize Dash app
 app = dash.Dash(__name__)
@@ -770,30 +793,33 @@ app.layout = html.Div([
     dcc.Graph(id='ohlc-plot')
 ])
 
-# Callback to update graphs
+# Callback for updating the probability plot
 @app.callback(
-    [Output('probability-plot', 'figure'),
-     Output('ohlc-plot', 'figure')],
+    Output('probability-plot', 'figure'),
     [Input('dataset-dropdown', 'value'), Input('episode-input', 'value')]
 )
-def update_graphs(selected_dataset, selected_episode):
-    # Get probabilities data
+
+def update_probability_plot(selected_dataset, selected_episode):
     data = episode_probabilities[selected_dataset][selected_episode]
     x_values = list(range(len(data['Short'])))
-
-    # Create probability plot
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=x_values, y=data['Short'], mode='lines', name='Short'))
     fig.add_trace(go.Scatter(x=x_values, y=data['Neutral'], mode='lines', name='Neutral'))
     fig.add_trace(go.Scatter(x=x_values, y=data['Long'], mode='lines', name='Long'))
+    fig.update_layout(title='Action Probabilities Over Episodes', xaxis_title='Time', yaxis_title='Probability', yaxis=dict(range=[0, 1]))
+    return fig
 
-    fig.update_layout(title='Action Probabilities Over Episodes',
-                      xaxis_title='Time',
-                      yaxis_title='Probability',
-                      yaxis=dict(range=[0, 1]))  # Setting the fixed scale for y-axis
+@app.callback(
+    Output('ohlc-plot', 'figure'),
+    [Input('dataset-dropdown', 'value')]
+)
 
-    # Get OHLC data
-    ohlc_data = get_ohlc_data(selected_dataset, selected_episode)
+
+def update_ohlc_plot(selected_dataset, market='EURUSD'):
+    ohlc_data = get_ohlc_data(selected_dataset, market)
+
+    if ohlc_data.empty:
+        return go.Figure(layout=go.Layout(title="No OHLC data available."))
 
     # Create OHLC plot
     ohlc_fig = go.Figure(data=[go.Ohlc(
@@ -804,11 +830,9 @@ def update_graphs(selected_dataset, selected_episode):
         close=ohlc_data['Close']
     )])
 
-    ohlc_fig.update_layout(title='OHLC Data',
-                           xaxis_title='Time',
-                           yaxis_title='Price')
+    ohlc_fig.update_layout(title='OHLC Data', xaxis_title='Time', yaxis_title='Price')
 
-    return fig, ohlc_fig
+    return ohlc_fig
 
 app.run_server(debug=True, port=8050)
 
