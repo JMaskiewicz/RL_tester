@@ -519,7 +519,7 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.005,  # learning rate for actor network
+                  alpha=0.05,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                   policy_clip=0.1,  # clip parameter for PPO
                   entropy_coefficient=1000,  # higher entropy coefficient encourages exploration
@@ -529,7 +529,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 200  # 100
+num_episodes = 50  # 100
 
 total_rewards = []
 episode_durations = []
@@ -796,10 +796,10 @@ def update_ohlc_plot(selected_dataset, market='EURUSD'):
 
     return ohlc_fig
 
-app.run_server(debug=True, port=8056)
+app.run_server(debug=True, port=8058)
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8056/")
+webbrowser.open("http://127.0.0.1:8058/")
 
 # Prepare the example observation
 observation_window = df_train.iloc[60:60+look_back]
