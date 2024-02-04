@@ -31,64 +31,74 @@ import backtest.backtest_functions.functions as BF
 
 # TODO add proper backtest function
 def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
-    # Create a validation environment
-    validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,tradable_markets=tradable_markets, provision=provision, initial_balance=initial_balance, leverage=leverage)
+    agent.actor.eval()
+    agent.critic.eval()
 
-    # Generate Predictions
-    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-    for validation_observation in range(len(df) - validation_env.look_back):
-        observation = validation_env.reset(validation_observation)
-        action = agent.choose_best_action(observation)
-        predictions_df.iloc[validation_observation + validation_env.look_back] = action
+    with torch.no_grad():  # Disable gradient computation for inference
+        # Create a validation environment
+        validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+                                                   tradable_markets=tradable_markets, provision=provision,
+                                                   initial_balance=initial_balance, leverage=leverage)
 
-    # Merge with original DataFrame
-    df_with_predictions = df.copy()
-    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+        # Generate Predictions
+        predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+        for validation_observation in range(len(df) - validation_env.look_back):
+            observation = validation_env.reset(validation_observation)
+            action = agent.choose_best_action(observation)  # choose_best_action should be used for inference
+            predictions_df.iloc[validation_observation + validation_env.look_back] = action
 
-    # Backtesting
-    balance = initial_balance
-    current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
-    total_reward = 0  # Initialize total reward
-    number_of_trades = 0
+        # Merge with original DataFrame
+        df_with_predictions = df.copy()
+        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
-    for i in range(look_back, len(df_with_predictions)):
-        action = df_with_predictions['Predicted_Action'].iloc[i]
-        current_price = df_with_predictions[('Close', mkf)].iloc[i - 1]
-        next_price = df_with_predictions[('Close', mkf)].iloc[i]
+        # Backtesting
+        balance = initial_balance
+        current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
+        total_reward = 0  # Initialize total reward
+        number_of_trades = 0
 
-        # Calculate log return
-        log_return = math.log(next_price / current_price) if current_price != 0 else 0
-        reward = 0
+        for i in range(look_back, len(df_with_predictions)):
+            action = df_with_predictions['Predicted_Action'].iloc[i]
+            current_price = df_with_predictions[('Close', mkf)].iloc[i - 1]
+            next_price = df_with_predictions[('Close', mkf)].iloc[i]
 
-        if action == 1:  # Buying
-            reward = log_return
-        elif action == -1:  # Selling
-            reward = -log_return
+            # Calculate log return
+            log_return = math.log(next_price / current_price) if current_price != 0 else 0
+            reward = 0
 
-        # Apply leverage
-        reward *= leverage
+            if action == 1:  # Buying
+                reward = log_return
+            elif action == -1:  # Selling
+                reward = -log_return
 
-        # Calculate cost based on action and current position
-        if action != current_position:
-            if abs(action - current_position) == 2:
-                provision_cost = math.log(1 - 2 * provision)
+            # Apply leverage
+            reward *= leverage
+
+            # Calculate cost based on action and current position
+            if action != current_position:
+                if abs(action - current_position) == 2:
+                    provision_cost = math.log(1 - 2 * provision)
+                else:
+                    provision_cost = math.log(1 - provision) if action != 0 else 0
+                number_of_trades += 1
             else:
-                provision_cost = math.log(1 - provision) if action != 0 else 0
-            number_of_trades += 1
-        else:
-            provision_cost = 0
+                provision_cost = 0
 
-        reward += provision_cost
+            reward += provision_cost
 
-        # Update the balance
-        balance *= math.exp(reward)
+            # Update the balance
+            balance *= math.exp(reward)
 
-        # Scale the reward
-        scaled_reward = reward
-        total_reward += scaled_reward  # Accumulate total reward
+            # Scale the reward
+            scaled_reward = reward
+            total_reward += scaled_reward  # Accumulate total reward
 
-        # Update current position
-        current_position = action
+            # Update current position
+            current_position = action
+
+    # Ensure the agent's networks are back in training mode after evaluation
+    agent.actor.train()
+    agent.critic.train()
 
     return balance, total_reward, number_of_trades
 
@@ -243,6 +253,9 @@ class PPO_Agent:
         self.memory.store_memory(state, action, probs, vals, reward, done)
 
     def learn(self):
+        self.actor.train()
+        self.critic.train()
+
         for _ in range(self.n_epochs):
             # Generating the data for the entire batch
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
@@ -522,14 +535,14 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   alpha=0.05,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                   policy_clip=0.1,  # clip parameter for PPO
-                  entropy_coefficient=1000,  # higher entropy coefficient encourages exploration
+                  entropy_coefficient=1,  # higher entropy coefficient encourages exploration
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 50  # 100
+num_episodes = 100  # 100
 
 total_rewards = []
 episode_durations = []
