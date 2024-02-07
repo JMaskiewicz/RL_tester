@@ -522,7 +522,7 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 1  # 40
+epochs = 10  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
@@ -532,9 +532,9 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.05,  # learning rate for actor network
+                  alpha=0.005,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
-                  policy_clip=0.1,  # clip parameter for PPO
+                  policy_clip=0,  # clip parameter for PPO
                   entropy_coefficient=1,  # higher entropy coefficient encourages exploration
                   batch_size=batch_size,
                   n_epochs=epochs,
@@ -553,7 +553,7 @@ index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']]
 columns = ['Final Balance', 'Dataset Index']
 backtest_results = pd.DataFrame(index=index, columns=columns)
 
-# Assuming df_train is your DataFrame
+# Rolling DF
 rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
 dataset_iterator = cycle(rolling_datasets)
 
