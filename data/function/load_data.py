@@ -73,3 +73,33 @@ def unpack_all_rars_in_folder():
                 print(f"Extracted {filename} to {extracted_folder}")
             except Exception as e:
                 print(f"Error extracting {filename}: {e}")
+
+data_folder = "./data"
+
+def load_data_long_format(currencies, timestamp_x):
+    agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+    dfs = []
+    for currency in tqdm(currencies):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        data_folder = os.path.join(project_root, 'data_sets')
+        file_path = os.path.join(data_folder, f'{currency}_2003-2022.txt')
+
+        df = pd.read_csv(file_path, sep=',')
+        df['Date'] = pd.to_datetime(df['Date'] + " " + df['time'], format='%Y.%m.%d %H:%M')
+        df.drop(["time"], axis=1, inplace=True)
+        df = df[['Date', 'Open', 'High', 'Low', 'Close']]
+        df.set_index('Date', inplace=True)
+
+        # Resample and aggregate
+        df = df.resample(timestamp_x).agg(agg_dict).dropna()
+
+        # Add currency identifier
+        df['Currency'] = currency
+
+        dfs.append(df.reset_index())  # Reset index to turn 'Date' back into a column
+
+    # Concatenate all dataframes
+    df_all = pd.concat(dfs, axis=0)
+
+    return df_all
