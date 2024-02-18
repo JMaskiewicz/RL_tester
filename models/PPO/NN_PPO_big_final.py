@@ -85,7 +85,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
 
         # Scale the reward
         scaled_reward = reward
-        total_reward += scaled_reward  # Accumulate total reward
+        total_reward += 100 * scaled_reward  # Accumulate total reward
 
         # Update current position
         current_position = action
@@ -148,53 +148,27 @@ class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, dropout_rate=0.25):
         super(ActorNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
         self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
+        self.dropout3 = nn.Dropout(dropout_rate)
         self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, n_actions)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout4 = nn.Dropout(dropout_rate)
+        self.fc5 = nn.Linear(256, n_actions)
+        self.relu = nn.ReLU()
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc6(x)
-        x = self.softmax(x)
+        x = self.relu(self.fc1(state))
+        x = self.dropout1(x)
+        x = self.relu(self.fc2(x))
+        x = self.dropout2(x)
+        x = self.relu(self.fc3(x))
+        x = self.dropout3(x)
+        x = self.relu(self.fc4(x))
+        x = self.dropout4(x)
+        x = self.softmax(self.fc5(x))
         return x
 
 # TODO rework network into transformer network
@@ -202,59 +176,34 @@ class CriticNetwork(nn.Module):
     def __init__(self, input_dims, dropout_rate=0.25):
         super(CriticNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
         self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
+        self.dropout3 = nn.Dropout(dropout_rate)
         self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, 1)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout4 = nn.Dropout(dropout_rate)
+        self.fc5 = nn.Linear(256, 1)
+        self.relu = nn.ReLU()
 
     def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        q = self.fc6(x)
+        x = self.relu(self.fc1(state))
+        x = self.dropout1(x)
+        x = self.relu(self.fc2(x))
+        x = self.dropout2(x)
+        x = self.relu(self.fc3(x))
+        x = self.dropout3(x)
+        x = self.relu(self.fc4(x))
+        x = self.dropout4(x)
+        q = self.fc5(x)
         return q
 
 
 
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
-        # self.device = torch.device("cpu")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO CUDA is slower? not sure why, probably because of the small batch size or network
+        self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma
         self.policy_clip = policy_clip
@@ -322,7 +271,7 @@ class PPO_Agent:
                 weighted_clipped_probs = clipped_probs * batch_advantages
                 entropy = dist.entropy().mean()  # Entropy of the policy distribution
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean() - self.entropy_coefficient * entropy
-                l1_loss_actor = sum(torch.sum(torch.abs(param)) for param in self.actor.parameters())
+                l1_loss_actor = sum(torch.sum(torch.abs(param)) for param in self.actor.parameters()) # L1 regularization
                 actor_loss += self.l1_lambda * l1_loss_actor
 
                 # Critic Network Loss
@@ -499,7 +448,7 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        final_reward = reward
+        final_reward = 100 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -521,7 +470,7 @@ add_indicators(df, indicators)
 
 df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2013-01-01'
+start_date = '2014-06-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -535,15 +484,15 @@ variables = [
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
-window_size = '1Y'
+window_size = '10Y'
 starting_balance = 10000
-look_back = 12
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+look_back = 20
+provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 1  # 40
-mini_batch_size = 32
+epochs = 40  # 40
+mini_batch_size = 256
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 1e-5
@@ -551,18 +500,18 @@ l1_lambda = 1e-5
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
-                  gamma=0.9,
-                  alpha=0.004,  # learning rate for actor network
-                  gae_lambda=0.8,  # lambda for generalized advantage estimation
-                  policy_clip=0.1,  # clip parameter for PPO
-                  entropy_coefficient=1,  # higher entropy coefficient encourages exploration
+                  gamma=0.95,  # discount factor
+                  alpha=0.0025,  # learning rate for actor network
+                  gae_lambda=0.9,  # lambda for generalized advantage estimation
+                  policy_clip=0.2,  # clip parameter for PPO
+                  entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration !!!
                   batch_size=batch_size,
                   n_epochs=epochs,
                   mini_batch_size=mini_batch_size,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 1000  # 100
+num_episodes = 100  # 100
 
 total_rewards = []
 episode_durations = []
@@ -600,7 +549,7 @@ for episode in tqdm(range(num_episodes)):
 
         # Check if enough data is collected or if the dataset ends
         if len(agent.memory.states) >= agent.memory.batch_size or done:
-            agent.learn()
+            agent.learn()  # TODO check here
             agent.memory.clear_memory()
 
     # Backtesting in parallel
