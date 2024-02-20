@@ -453,11 +453,11 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 50  # 40
+epochs = 10  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0005
-l1_lambda = 1e-6
+weight_decay = 0.000005
+l1_lambda = 0.000005
 num_episodes = 100  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -465,14 +465,14 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    n_actions=env.action_space.n,
                    epochs=epochs,
                    mini_batch_size=mini_batch_size,
-                   alpha=0.01,
+                   alpha=0.0005,
                    gamma=0.95,
                    epsilon=1.0,
-                   epsilon_dec=1.25/num_episodes,
+                   epsilon_dec=1.5/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
                    batch_size=batch_size,
-                   replace=1000,
+                   replace=10,
                    weight_decay=weight_decay,
                    l1_lambda=l1_lambda)
 
