@@ -467,7 +467,7 @@ for episode in tqdm(range(num_episodes)):
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.2f}")
     print("-----------------------------------")
 
 
