@@ -56,7 +56,6 @@ def calculate_probabilities_DQN(df, environment_class, agent, look_back, variabl
     for observation_idx in range(len(df) - env.look_back):
         observation = env.reset(observation_idx)
         probs = agent.get_action_probabilities(observation)
-        # Ensure probs[0] has the shape [3] representing the probabilities for each action
         assert probs.shape == (3,), f"Expected probs shape to be (3,), got {probs.shape}"
         action_probabilities.append(probs)
 
@@ -72,7 +71,6 @@ def generate_predictions_and_backtest(df, agent, tradable_market, look_back, var
     agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        # Create a validation environment
         validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
                                                    tradable_markets=tradable_market, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
@@ -81,7 +79,7 @@ def generate_predictions_and_backtest(df, agent, tradable_market, look_back, var
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
         for validation_observation in range(len(df) - validation_env.look_back):
             observation = validation_env.reset()
-            action = agent.choose_best_action(observation)  # choose_best_action should be used for inference
+            action = agent.choose_best_action(observation)  # choose_best_action
             predictions_df.iloc[validation_observation + validation_env.look_back] = action
 
         # Merge with original DataFrame
@@ -95,7 +93,7 @@ def generate_predictions_and_backtest(df, agent, tradable_market, look_back, var
         number_of_trades = 0
 
         for i in range(look_back, len(df_with_predictions)):
-            action = df_with_predictions['Predicted_Action'].iloc[i] - 1 # Adjust action for {0, 1, 2} -> {-1, 0, 1}
+            action = df_with_predictions['Predicted_Action'].iloc[i] - 1  # Adjust action for {0, 1, 2} -> {-1, 0, 1}
             current_price = df_with_predictions[('Close', tradable_market)].iloc[i - 1]
             next_price = df_with_predictions[('Close', tradable_market)].iloc[i]
 
@@ -213,7 +211,6 @@ class DDQN_Agent:
         self.replace_target_cnt = replace
         self.learn_step_counter = 0
         self.weight_decay = weight_decay
-        self.l1_lambda = l1_lambda
 
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = QNetwork(input_dims, n_actions).to(self.device)
@@ -257,8 +254,7 @@ class DDQN_Agent:
 
                 self.optimizer.zero_grad()
 
-                q_pred = self.q_policy(mini_states).gather(1, torch.tensor(mini_actions).unsqueeze(-1).to(
-                    self.device)).squeeze(-1)
+                q_pred = self.q_policy(mini_states).gather(1, torch.tensor(mini_actions).unsqueeze(-1).to(self.device)).squeeze(-1)
                 q_next = self.q_target(mini_states_).detach()
                 q_eval = self.q_policy(mini_states_).detach()
 
@@ -271,7 +267,6 @@ class DDQN_Agent:
 
                 # Calculate L1 penalty for all parameters
                 l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
-                # Combine MSE loss with L1 penalty
                 total_loss = loss + self.l1_lambda * l1_penalty
 
                 total_loss.backward()
@@ -296,6 +291,7 @@ class DDQN_Agent:
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
+
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
@@ -322,6 +318,7 @@ class DDQN_Agent:
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
+
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
@@ -450,7 +447,7 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '10Y'
 starting_balance = 10000
-look_back = 10
+look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
@@ -458,7 +455,7 @@ batch_size = 2048
 epochs = 50  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0001
+weight_decay = 0.0005
 l1_lambda = 1e-6
 num_episodes = 100  # 100
 # Create the environment
@@ -551,7 +548,6 @@ for episode in tqdm(range(num_episodes)):
     episode_probabilities['validation'].append(validation_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
     episode_probabilities['test'].append(test_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
 
-
     # results
     end_time = time.time()
     episode_time = end_time - start_time
@@ -564,6 +560,7 @@ for episode in tqdm(range(num_episodes)):
 
 
 print(backtest_results)
+
 # Plotting the results after all episodes
 import matplotlib.pyplot as plt
 
