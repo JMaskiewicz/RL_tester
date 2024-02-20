@@ -458,7 +458,7 @@ epochs = 50  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
-l1_lambda = 1e-
+l1_lambda = 1e-6
 num_episodes = 100  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
