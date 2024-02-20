@@ -211,6 +211,7 @@ class DDQN_Agent:
         self.replace_target_cnt = replace
         self.learn_step_counter = 0
         self.weight_decay = weight_decay
+        self.l1_lambda = l1_lambda
 
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = QNetwork(input_dims, n_actions).to(self.device)
