@@ -96,17 +96,28 @@ random.seed(0)
 
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions):
+    def __init__(self, input_dims, n_actions, dropout_rate=0.2):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc3 = nn.Linear(1024, 512)
+        self.dropout3 = nn.Dropout(dropout_rate)
+        self.fc4 = nn.Linear(512, 256)
+        self.dropout4 = nn.Dropout(dropout_rate)
+        self.fc5 = nn.Linear(256, n_actions)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
+        x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
-
+        x = self.dropout2(x)
+        x = F.relu(self.fc3(x))
+        x = self.dropout3(x)
+        x = F.relu(self.fc4(x))
+        x = self.dropout4(x)
+        return self.fc5(x)
 
 class ReplayBuffer:
     def __init__(self, max_size, input_shape, n_actions):
@@ -187,6 +198,7 @@ class DDQN_Agent:
         if self.memory.mem_cntr < self.batch_size:
             return
 
+        print('Learning... CHECK')
         self.replace_target_network()
 
         for epoch in range(self.epochs):
@@ -220,6 +232,7 @@ class DDQN_Agent:
                 self.optimizer.step()
 
         self.learn_step_counter += 1
+        print('Epsilon decreasing...')
         self.decrement_epsilon()
 
     def choose_action(self, observation):
@@ -261,7 +274,7 @@ class DDQN_Agent:
         """
         Returns the probabilities of each action for a given observation.
         This is not quite forward as DDQN uses Q values to choose the best action, not probabilities.
-        There is need to somehow convert Q values to probabilities.
+        Conversion is done via
         """
         pass
 
@@ -272,8 +285,8 @@ class Trading_Environment_Basic(gym.Env):
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = initial_balance
-        self.current_position = 0  # Initial position: 0 (neutral)
-        self.variables = variables if variables is not None else []
+        self.current_position = 0
+        self.variables = variables
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
@@ -282,14 +295,18 @@ class Trading_Environment_Basic(gym.Env):
         self.action_space = spaces.Discrete(3)
 
         # Define observation space based on the look_back period and the number of variables
-        input_dims = self.calculate_input_dims()
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(input_dims,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf,
+                                            high=np.inf,
+                                            shape=(look_back + 1,),  # +1 for current position
+                                            dtype=np.float32)
 
         self.reset()
 
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
-        return num_variables * self.look_back  # Total dimensions based on variables and look_back period
+        input_dims = num_variables * self.look_back  # Variables times look_back
+        input_dims += 1  # Add one more dimension for current position
+        return input_dims
 
     def reset(self):
         self.current_step = self.look_back  # Start from the look_back position
@@ -299,21 +316,23 @@ class Trading_Environment_Basic(gym.Env):
         return self._next_observation()
 
     def _next_observation(self):
-        start = self.current_step - self.look_back
+        start = max(self.current_step - self.look_back, 0)
         end = self.current_step
 
-        # Generate observation based on the selected variables and look_back period
+        # Apply scaling based on 'edit' property of each variable
         scaled_observation = []
         for variable in self.variables:
             data = self.df[variable['variable']].iloc[start:end].values
             if variable['edit'] == 'standardize':
-                scaled_data = (data - np.mean(data)) / np.std(data)
+                scaled_data = standardize_data(data)
             elif variable['edit'] == 'normalize':
-                scaled_data = (data - np.min(data)) / (np.max(data) - np.min(data))
-            else:
-                scaled_data = data  # No scaling applied
+                scaled_data = normalize_data(data)
+            else:  # Default none
+                scaled_data = data
 
             scaled_observation.extend(scaled_data)
+
+        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
 
         return np.array(scaled_observation)
 
@@ -358,7 +377,7 @@ add_indicators(df, indicators)
 
 df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2014-01-01'
+start_date = '2015-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -379,15 +398,15 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 100  # 40
+epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0005 # TODO add
-l1_lambda = 1e-5 # TODO add
-num_episodes = 1000  # 100
+weight_decay = 0.0005  # TODO add
+l1_lambda = 1e-5  # TODO add
+num_episodes = 100  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-agent = DDQN_Agent(input_dims=env.observation_space.shape[0],
+agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    n_actions=env.action_space.n,
                    epochs=epochs,
                    mini_batch_size=mini_batch_size,
@@ -397,10 +416,8 @@ agent = DDQN_Agent(input_dims=env.observation_space.shape[0],
                    epsilon_dec=1/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
-                   batch_size=64,
+                   batch_size=batch_size,
                    replace=1000)
-
-
 
 total_rewards = []
 episode_durations = []
@@ -434,10 +451,10 @@ for episode in tqdm(range(num_episodes)):
         observation_, reward, done, info = env.step(action)
         agent.store_transition(observation, action, reward, observation_, done)
         observation = observation_
-        cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if agent.memory.mem_cntr >= agent.batch_size or done:
+        if agent.memory.mem_cntr >= agent.batch_size:
+            print('Learning... 11')
             agent.learn()
             agent.memory.clear_memory()
 
@@ -468,7 +485,7 @@ for episode in tqdm(range(num_episodes)):
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.2f}")
+    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.3f}")
     print("-----------------------------------")
 
 

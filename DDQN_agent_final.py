@@ -28,7 +28,43 @@ from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
 from data.edit import normalize_data, standardize_data
-import backtest.backtest_functions.functions as BF
+# import backtest.backtest_functions.functions as BF
+
+# TODO add proper backtest function
+def make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    for observation_idx in range(len(df) - env.look_back):
+        observation = env.reset(observation_idx)
+        action = agent.choose_best_action(observation)
+        predictions_df.iloc[observation_idx + env.look_back] = action
+
+    df_with_predictions = df.copy()
+    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+    return df_with_predictions
+
+def process_dataset_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    predictions = make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    probabilities = calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    return predictions, probabilities
+
+def calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    action_probabilities = []
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    for observation_idx in range(len(df) - env.look_back):
+        observation = env.reset(observation_idx)
+        probs = agent.get_action_probabilities(observation)
+        # Ensure probs[0] has the shape [3] representing the probabilities for each action
+        assert probs.shape == (3,), f"Expected probs shape to be (3,), got {probs.shape}"
+        action_probabilities.append(probs)
+
+    probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
+    return probabilities_df
+
+def calculate_probabilities_wrapper_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    return calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
 # TODO add proper backtest function
 def generate_predictions_and_backtest(df, agent, tradable_market, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
@@ -96,17 +132,28 @@ random.seed(0)
 
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions):
+    def __init__(self, input_dims, n_actions, dropout_rate=0.125):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc3 = nn.Linear(1024, 512)
+        self.dropout3 = nn.Dropout(dropout_rate)
+        self.fc4 = nn.Linear(512, 256)
+        self.dropout4 = nn.Dropout(dropout_rate)
+        self.fc5 = nn.Linear(256, n_actions)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
+        x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
-
+        x = self.dropout2(x)
+        x = F.relu(self.fc3(x))
+        x = self.dropout3(x)
+        x = F.relu(self.fc4(x))
+        x = self.dropout4(x)
+        return self.fc5(x)
 
 class ReplayBuffer:
     def __init__(self, max_size, input_shape, n_actions):
@@ -150,8 +197,9 @@ class ReplayBuffer:
 
 class DDQN_Agent:
     def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, alpha=0.001, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000):
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
+        # self.device = torch.device("cpu")
+        print(f"Using device: {self.device}")
         self.epochs = epochs
         self.mini_batch_size = mini_batch_size
         self.gamma = gamma
@@ -187,6 +235,7 @@ class DDQN_Agent:
         if self.memory.mem_cntr < self.batch_size:
             return
 
+        print('Learning... CHECK')
         self.replace_target_network()
 
         for epoch in range(self.epochs):
@@ -220,6 +269,7 @@ class DDQN_Agent:
                 self.optimizer.step()
 
         self.learn_step_counter += 1
+        print('Epsilon decreasing...')
         self.decrement_epsilon()
 
     def choose_action(self, observation):
@@ -256,14 +306,21 @@ class DDQN_Agent:
     def get_epsilon(self):
         return self.epsilon
 
-    # TODO
     def get_action_probabilities(self, observation):
         """
         Returns the probabilities of each action for a given observation.
-        This is not quite forward as DDQN uses Q values to choose the best action, not probabilities.
-        There is need to somehow convert Q values to probabilities.
+        Converts Q values to a probability distribution using the softmax function.
         """
-        pass
+        if not isinstance(observation, np.ndarray):
+            observation = np.array(observation)
+        observation = observation.reshape(1, -1)
+        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+
+        with torch.no_grad():
+            q_values = self.q_policy(state)
+            probabilities = F.softmax(q_values, dim=1).cpu().numpy()
+
+        return probabilities.flatten()
 
 
 class Trading_Environment_Basic(gym.Env):
@@ -272,8 +329,8 @@ class Trading_Environment_Basic(gym.Env):
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = initial_balance
-        self.current_position = 0  # Initial position: 0 (neutral)
-        self.variables = variables if variables is not None else []
+        self.current_position = 0
+        self.variables = variables
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
@@ -282,38 +339,48 @@ class Trading_Environment_Basic(gym.Env):
         self.action_space = spaces.Discrete(3)
 
         # Define observation space based on the look_back period and the number of variables
-        input_dims = self.calculate_input_dims()
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(input_dims,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf,
+                                            high=np.inf,
+                                            shape=(look_back + 1,),  # +1 for current position
+                                            dtype=np.float32)
 
         self.reset()
 
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
-        return num_variables * self.look_back  # Total dimensions based on variables and look_back period
+        input_dims = num_variables * self.look_back  # Variables times look_back
+        input_dims += 1  # Add one more dimension for current position
+        return input_dims
 
-    def reset(self):
-        self.current_step = self.look_back  # Start from the look_back position
+    def reset(self, observation_idx=None):
+        if observation_idx is not None:
+            self.current_step = observation_idx + self.look_back
+        else:
+            self.current_step = self.look_back
+
         self.balance = self.initial_balance
-        self.current_position = 0  # Reset to neutral position
+        self.current_position = 0
         self.done = False
         return self._next_observation()
 
     def _next_observation(self):
-        start = self.current_step - self.look_back
+        start = max(self.current_step - self.look_back, 0)
         end = self.current_step
 
-        # Generate observation based on the selected variables and look_back period
+        # Apply scaling based on 'edit' property of each variable
         scaled_observation = []
         for variable in self.variables:
             data = self.df[variable['variable']].iloc[start:end].values
             if variable['edit'] == 'standardize':
-                scaled_data = (data - np.mean(data)) / np.std(data)
+                scaled_data = standardize_data(data)
             elif variable['edit'] == 'normalize':
-                scaled_data = (data - np.min(data)) / (np.max(data) - np.min(data))
-            else:
-                scaled_data = data  # No scaling applied
+                scaled_data = normalize_data(data)
+            else:  # Default none
+                scaled_data = data
 
             scaled_observation.extend(scaled_data)
+
+        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
 
         return np.array(scaled_observation)
 
@@ -358,7 +425,7 @@ add_indicators(df, indicators)
 
 df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2014-01-01'
+start_date = '2015-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -382,12 +449,12 @@ batch_size = 2048
 epochs = 100  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0005 # TODO add
-l1_lambda = 1e-5 # TODO add
+weight_decay = 0.0005  # TODO add
+l1_lambda = 1e-5  # TODO add
 num_episodes = 1000  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-agent = DDQN_Agent(input_dims=env.observation_space.shape[0],
+agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    n_actions=env.action_space.n,
                    epochs=epochs,
                    mini_batch_size=mini_batch_size,
@@ -397,10 +464,8 @@ agent = DDQN_Agent(input_dims=env.observation_space.shape[0],
                    epsilon_dec=1/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
-                   batch_size=64,
+                   batch_size=batch_size,
                    replace=1000)
-
-
 
 total_rewards = []
 episode_durations = []
@@ -434,10 +499,9 @@ for episode in tqdm(range(num_episodes)):
         observation_, reward, done, info = env.step(action)
         agent.store_transition(observation, action, reward, observation_, done)
         observation = observation_
-        cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if agent.memory.mem_cntr >= agent.batch_size or done:
+        if agent.memory.mem_cntr >= agent.batch_size:
             agent.learn()
             agent.memory.clear_memory()
 
@@ -461,6 +525,21 @@ for episode in tqdm(range(num_episodes)):
     backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
     backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
 
+    # calculate probabilities
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_train = executor.submit(calculate_probabilities_wrapper_DQN, df_train, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_validation = executor.submit(calculate_probabilities_wrapper_DQN, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_test = executor.submit(calculate_probabilities_wrapper_DQN, df_test, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+
+        train_probs = future_train.result()
+        validation_probs = future_validation.result()
+        test_probs = future_test.result()
+
+    episode_probabilities['train'].append(train_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+    episode_probabilities['validation'].append(validation_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+    episode_probabilities['test'].append(test_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+
+
     # results
     end_time = time.time()
     episode_time = end_time - start_time
@@ -468,7 +547,7 @@ for episode in tqdm(range(num_episodes)):
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.2f}")
+    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.3f}")
     print("-----------------------------------")
 
 
@@ -494,5 +573,185 @@ plt.title('Total Balance Over Episodes')
 plt.xlabel('Episode')
 plt.ylabel('Total Balance')
 plt.show()
+
+# final prediction agent
+# predictions and probabilities for train, validation and test calculated in parallel
+with ThreadPoolExecutor() as executor:
+    futures = []
+    datasets = [df_train, df_validation, df_test]
+    for df in datasets:
+        futures.append(executor.submit(process_dataset_DQN, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
+
+    results = [future.result() for future in futures]
+
+# Unpack results
+df_train_with_predictions, df_train_with_probabilities = results[0]
+df_validation_with_predictions, df_validation_with_probabilities = results[1]
+df_test_with_predictions, df_test_with_probabilities = results[2]
+
+# plotting probabilities
+plt.figure(figsize=(16, 6))
+plt.plot(df_validation_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_validation_with_probabilities['Neutral'], label='Neutral', color='blue')
+plt.plot(df_validation_with_probabilities['Long'], label='Long', color='green')
+
+plt.title('Action Probabilities Over Time for Validation Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(16, 6))
+plt.plot(df_train_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_train_with_probabilities['Neutral'], label='Neutral', color='blue')
+plt.plot(df_train_with_probabilities['Long'], label='Long', color='green')
+
+plt.title('Action Probabilities Over Time for Train Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(16, 6))
+plt.plot(df_test_with_probabilities['Short'], label='Short', color='red')
+plt.plot(df_test_with_probabilities['Neutral'], label='Neutral', color='blue')
+plt.plot(df_test_with_probabilities['Long'], label='Long', color='green')
+
+plt.title('Action Probabilities Over Time for Test Set')
+plt.xlabel('Time')
+plt.ylabel('Probability')
+plt.legend()
+plt.show()
+
+###
+import dash
+from dash import dcc, html
+import plotly.graph_objects as go
+from dash.dependencies import Input, Output
+import webbrowser
+import pandas as pd
+
+
+def get_ohlc_data(selected_dataset, market):
+    dataset_mapping = {
+        'train': df_train,
+        'validation': df_validation,
+        'test': df_test
+    }
+    data = dataset_mapping[selected_dataset]
+
+    # Construct the column tuples based on the MultiIndex structure
+    ohlc_columns = [('Open', market), ('High', market), ('Low', market), ('Close', market)]
+
+    # Extract the OHLC data for the specified market
+    ohlc_data = data.loc[:, ohlc_columns]
+
+    # Reset index to turn 'Date' into a column
+    ohlc_data = ohlc_data.reset_index()
+
+    # Flatten the MultiIndex for columns, and map each OHLC column correctly
+    ohlc_data.columns = ['Time'] + [col[0] for col in ohlc_data.columns[1:]]
+
+    # Ensure 'Time' column is in datetime format
+    ohlc_data['Time'] = pd.to_datetime(ohlc_data['Time'])
+
+    return ohlc_data
+
+# Initialize Dash app
+app = dash.Dash(__name__)
+
+# App layout
+app.layout = html.Div([
+    dcc.Dropdown(
+        id='dataset-dropdown',
+        options=[
+            {'label': 'Train', 'value': 'train'},
+            {'label': 'Validation', 'value': 'validation'},
+            {'label': 'Test', 'value': 'test'}
+        ],
+        value='train'
+    ),
+    dcc.Input(id='episode-input', type='number', value=0, min=0, step=1),
+    dcc.Graph(id='probability-plot'),
+    dcc.Graph(id='ohlc-plot')
+])
+
+# Callback for updating the probability plot
+@app.callback(
+    Output('probability-plot', 'figure'),
+    [Input('dataset-dropdown', 'value'), Input('episode-input', 'value')]
+)
+
+def update_probability_plot(selected_dataset, selected_episode):
+    data = episode_probabilities[selected_dataset][selected_episode]
+    x_values = list(range(len(data['Short'])))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x_values, y=data['Short'], mode='lines', name='Short'))
+    fig.add_trace(go.Scatter(x=x_values, y=data['Neutral'], mode='lines', name='Neutral'))
+    fig.add_trace(go.Scatter(x=x_values, y=data['Long'], mode='lines', name='Long'))
+    fig.update_layout(title='Action Probabilities Over Episodes', xaxis_title='Time', yaxis_title='Probability', yaxis=dict(range=[0, 1]))
+    return fig
+
+@app.callback(
+    Output('ohlc-plot', 'figure'),
+    [Input('dataset-dropdown', 'value')]
+)
+
+
+def update_ohlc_plot(selected_dataset, market='EURUSD'):
+    ohlc_data = get_ohlc_data(selected_dataset, market)
+
+    if ohlc_data.empty:
+        return go.Figure(layout=go.Layout(title="No OHLC data available."))
+
+    # Create OHLC plot
+    ohlc_fig = go.Figure(data=[go.Ohlc(
+        x=ohlc_data['Time'],
+        open=ohlc_data['Open'],
+        high=ohlc_data['High'],
+        low=ohlc_data['Low'],
+        close=ohlc_data['Close']
+    )])
+
+    ohlc_fig.update_layout(title='OHLC Data', xaxis_title='Time', yaxis_title='Price')
+
+    return ohlc_fig
+
+app.run_server(debug=True, port=8058)
+
+# Open the web browser
+webbrowser.open("http://127.0.0.1:8058/")
+
+# Prepare the example observation
+observation_window = df_train.iloc[60:60+look_back]
+processed_observation = []
+
+for variable in variables:
+    data = observation_window[variable['variable']].values
+    if variable['edit'] == 'standardize':
+        processed_data = standardize_data(data)
+    elif variable['edit'] == 'normalize':
+        processed_data = normalize_data(data)
+    else:
+        processed_data = data
+    processed_observation.extend(processed_data)
+
+# Convert to numpy array
+processed_observation = np.array(processed_observation)
+
+def get_probabilities_for_position(current_position):
+    observation_with_position = np.append(processed_observation, (current_position+1)/2)
+    observation_with_position = observation_with_position.reshape(1, -1)
+    return agent.get_action_probabilities(observation_with_position)
+
+# Get probabilities for each position
+probabilities_short = get_probabilities_for_position(-1)
+probabilities_neutral = get_probabilities_for_position(0)
+probabilities_long = get_probabilities_for_position(1)
+
+# Print or return the results
+print("Probabilities for Short Position:", probabilities_short)
+print("Probabilities for Neutral Position:", probabilities_neutral)
+print("Probabilities for Long Position:", probabilities_long)
 
 print('end')
