@@ -248,6 +248,7 @@ class PPO_Agent:
         self.memory.store_memory(state, action, probs, vals, reward, done)
 
     def learn(self):
+        print('Learning... CHECK')
         self.actor.train()
         self.critic.train()
 
@@ -519,7 +520,7 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 1 # 40
+epochs = 40 # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005

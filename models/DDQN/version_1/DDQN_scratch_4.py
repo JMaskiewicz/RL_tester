@@ -1,5 +1,5 @@
 """
-PPO 2.1
+DDQN 1.4
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -95,13 +95,13 @@ def generate_predictions_and_backtest(df, agent, tradable_market, look_back, var
         number_of_trades = 0
 
         for i in range(look_back, len(df_with_predictions)):
-            action = df_with_predictions['Predicted_Action'].iloc[i]
+            action = df_with_predictions['Predicted_Action'].iloc[i] - 1 # Adjust action for {0, 1, 2} -> {-1, 0, 1}
             current_price = df_with_predictions[('Close', tradable_market)].iloc[i - 1]
             next_price = df_with_predictions[('Close', tradable_market)].iloc[i]
 
             # Calculate log return
             log_return = np.log(next_price / current_price) if current_price != 0 else 0
-            reward = log_return * (action - 1) * leverage  # Adjust action for {0, 1, 2} -> {-1, 0, 1}
+            reward = log_return * action * leverage
 
             # Calculate provision cost if the action changes the position
             if action != current_position:
@@ -196,7 +196,7 @@ class ReplayBuffer:
 
 
 class DDQN_Agent:
-    def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, alpha=0.001, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000):
+    def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, alpha=0.001, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -212,13 +212,15 @@ class DDQN_Agent:
         self.batch_size = batch_size
         self.replace_target_cnt = replace
         self.learn_step_counter = 0
+        self.weight_decay = weight_decay
+        self.l1_lambda = l1_lambda
 
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = QNetwork(input_dims, n_actions).to(self.device)
         self.q_target = QNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
         self.q_target.eval()
-        self.optimizer = optim.Adam(self.q_policy.parameters(), lr=self.alpha)
+        self.optimizer = optim.Adam(self.q_policy.parameters(), lr=self.alpha, weight_decay=weight_decay)
 
     def store_transition(self, state, action, reward, state_, done):
         self.memory.store_transition(state, action, reward, state_, done)
@@ -264,8 +266,15 @@ class DDQN_Agent:
                 q_next[mini_dones] = 0.0
                 q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
+                # MSE loss
                 loss = F.mse_loss(q_pred, q_target)
-                loss.backward()
+
+                # Calculate L1 penalty for all parameters
+                l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
+                # Combine MSE loss with L1 penalty
+                total_loss = loss + self.l1_lambda * l1_penalty
+
+                total_loss.backward()
                 self.optimizer.step()
 
         self.learn_step_counter += 1
@@ -446,26 +455,28 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 100  # 40
+epochs = 50  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0005  # TODO add
-l1_lambda = 1e-5  # TODO add
-num_episodes = 1000  # 100
+weight_decay = 0.0001
+l1_lambda = 1e-6
+num_episodes = 100  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    n_actions=env.action_space.n,
                    epochs=epochs,
                    mini_batch_size=mini_batch_size,
-                   alpha=0.001,
+                   alpha=0.01,
                    gamma=0.95,
                    epsilon=1.0,
-                   epsilon_dec=1/num_episodes,
+                   epsilon_dec=1.25/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
                    batch_size=batch_size,
-                   replace=1000)
+                   replace=1000,
+                   weight_decay=weight_decay,
+                   l1_lambda=l1_lambda)
 
 total_rewards = []
 episode_durations = []
@@ -499,6 +510,7 @@ for episode in tqdm(range(num_episodes)):
         observation_, reward, done, info = env.step(action)
         agent.store_transition(observation, action, reward, observation_, done)
         observation = observation_
+        cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
         if agent.memory.mem_cntr >= agent.batch_size:
@@ -717,10 +729,10 @@ def update_ohlc_plot(selected_dataset, market='EURUSD'):
 
     return ohlc_fig
 
-app.run_server(debug=True, port=8058)
+app.run_server(debug=True, port=8062)
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8058/")
+webbrowser.open("http://127.0.0.1:8062/")
 
 # Prepare the example observation
 observation_window = df_train.iloc[60:60+look_back]
