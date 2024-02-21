@@ -124,7 +124,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward = reward * 500  # Scale reward for better learning
+            total_reward += reward * 400  # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -451,7 +451,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 500 * reward
+        final_reward = 400 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -461,7 +461,7 @@ class Trading_Environment_Basic(gym.Env):
 
 # Example usage
 # Stock market variables
-df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '1D')
+df = load_data(['EURUSD', 'USDJPY', 'EURJPY'], '4H')
 
 indicators = [
     {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -485,19 +485,19 @@ variables = [
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
-window_size = '20Y'
+window_size = '2Y'
 starting_balance = 10000
-look_back = 20
+look_back = 24
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 2048
+batch_size = 4096
 epochs = 50  # 40
-mini_batch_size = 128
+mini_batch_size = 256
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 0.00005
-num_episodes = 100  # 100
+num_episodes = 1000  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
@@ -511,7 +511,7 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    epsilon_end=0.01,
                    mem_size=100000,
                    batch_size=batch_size,
-                   replace=num_episodes/100,
+                   replace=5,  # num_episodes // 4
                    weight_decay=weight_decay,
                    l1_lambda=l1_lambda)
 

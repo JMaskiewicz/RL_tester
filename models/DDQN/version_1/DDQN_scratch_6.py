@@ -1,5 +1,5 @@
 """
-PPO 2.1
+DDQN 1.6
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -22,20 +22,55 @@ import gym
 from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
+import torch.nn.functional as F
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
 from data.edit import normalize_data, standardize_data
-import backtest.backtest_functions.functions as BF
+# import backtest.backtest_functions.functions as BF
+
+# TODO add proper backtest function
+def make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    for observation_idx in range(len(df) - env.look_back):
+        observation = env.reset(observation_idx)
+        action = agent.choose_best_action(observation)
+        predictions_df.iloc[observation_idx + env.look_back] = action
+
+    df_with_predictions = df.copy()
+    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+    return df_with_predictions
+
+def process_dataset_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    predictions = make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    probabilities = calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    return predictions, probabilities
+
+def calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    action_probabilities = []
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    for observation_idx in range(len(df) - env.look_back):
+        observation = env.reset(observation_idx)
+        probs = agent.get_action_probabilities(observation)
+        assert probs.shape == (3,), f"Expected probs shape to be (3,), got {probs.shape}"
+        action_probabilities.append(probs)
+
+    probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
+    return probabilities_df
+
+def calculate_probabilities_wrapper_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    return calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
 # TODO add proper backtest function
 def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
-    agent.actor.eval()
-    agent.critic.eval()
+    # Switch to evaluation mode
+    agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        # Create a validation environment
         validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
                                                    tradable_markets=mkf, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
@@ -43,18 +78,19 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
         # Generate Predictions
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
         for validation_observation in range(len(df) - validation_env.look_back):
-            observation = validation_env.reset(validation_observation)
-            action = agent.choose_best_action(observation)  # choose_best_action
-            action += - 1  # Convert action to -1, 0, 1
+            observation = validation_env.reset()
+            action = agent.choose_best_action(observation) - 1  # choose_best_action
             predictions_df.iloc[validation_observation + validation_env.look_back] = action
+            q_values = agent.get_action_q_values(observation)
+            probs = agent.get_action_probabilities(observation)
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
 
         # Backtesting
         balance = initial_balance
-        current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
+        current_position = 0  # Neutral position
         total_reward = 0  # Initialize total reward
         number_of_trades = 0
 
@@ -90,11 +126,10 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward  # Scale reward for better learning
+            total_reward += reward * 400  # Scale reward for better learning
 
-    # Ensure the agent's networks are back in training mode after evaluation
-    agent.actor.train()
-    agent.critic.train()
+    # Switch back to training mode
+    agent.q_policy.train()
 
     return balance, total_reward, number_of_trades
 
@@ -106,311 +141,252 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-# TODO use deque instead of list
-class PPOMemory:
-    def __init__(self, batch_size):
-        self.states = []
-        self.probs = []
-        self.vals = []
-        self.actions = []
-        self.rewards = []
-        self.dones = []
 
-        self.batch_size = batch_size
+class QNetwork(nn.Module):
+    def __init__(self, input_dims, n_actions, dropout_rate=0.125):
+        super(QNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc3 = nn.Linear(1024, 512)
+        self.dropout3 = nn.Dropout(dropout_rate)
+        self.fc4 = nn.Linear(512, 256)
+        self.dropout4 = nn.Dropout(dropout_rate)
+        self.fc5 = nn.Linear(256, n_actions)
 
-    def generate_batches(self):
-        n_states = len(self.states)
-        batch_start = np.arange(0, n_states, self.batch_size)
-        indices = np.arange(n_states, dtype=np.int64)
-        np.random.shuffle(indices)
-        batches = [indices[i:i + self.batch_size] for i in batch_start]
+    def forward(self, state):
+        x = F.relu(self.fc1(state))
+        x = self.dropout1(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout2(x)
+        x = F.relu(self.fc3(x))
+        x = self.dropout3(x)
+        x = F.relu(self.fc4(x))
+        x = self.dropout4(x)
+        return self.fc5(x)
 
-        return np.array(self.states), \
-            np.array(self.actions), \
-            np.array(self.probs), \
-            np.array(self.vals), \
-            np.array(self.rewards), \
-            np.array(self.dones), \
-            batches
+class ReplayBuffer:
+    def __init__(self, max_size, input_shape, n_actions):
+        self.mem_size = max_size
+        self.mem_cntr = 0
+        self.state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
+        self.new_state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
+        self.action_memory = np.zeros(self.mem_size, dtype=np.int64)
+        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
+        self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
 
-    def store_memory(self, state, action, probs, vals, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.probs.append(probs)
-        self.vals.append(vals)
-        self.rewards.append(float(reward))
-        self.dones.append(done)
+    def store_transition(self, state, action, reward, state_, done):
+        index = self.mem_cntr % self.mem_size
+        self.state_memory[index] = state
+        self.new_state_memory[index] = state_
+        self.action_memory[index] = action
+        self.reward_memory[index] = reward
+        self.terminal_memory[index] = done
+        self.mem_cntr += 1
+
+    def sample_buffer(self, batch_size):
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch = np.random.choice(max_mem, batch_size, replace=False)
+
+        states = self.state_memory[batch]
+        actions = self.action_memory[batch]
+        rewards = self.reward_memory[batch]
+        states_ = self.new_state_memory[batch]
+        dones = self.terminal_memory[batch]
+
+        return states, actions, rewards, states_, dones
 
     def clear_memory(self):
-        self.states = []
-        self.probs = []
-        self.actions = []
-        self.rewards = []
-        self.dones = []
-        self.vals = []
-
-# TODO rework network into TFT transformer network
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, dropout_rate=1/16):
-        super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.bn1 = nn.BatchNorm1d(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.bn2 = nn.BatchNorm1d(512)
-        self.fc3 = nn.Linear(512, 256)
-        self.bn3 = nn.BatchNorm1d(256)
-        self.fc4 = nn.Linear(256, n_actions)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc4(x)
-        x = self.softmax(x)
-        return x
-
-# TODO rework network into transformer network
-class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, dropout_rate=1/16):
-        super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.bn1 = nn.BatchNorm1d(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.bn2 = nn.BatchNorm1d(512)
-        self.fc3 = nn.Linear(512, 256)
-        self.bn3 = nn.BatchNorm1d(256)
-        self.fc4 = nn.Linear(256, 1)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
-
-    def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        q = self.fc4(x)
-        return q
+        self.mem_cntr = 0
+        self.state_memory = np.zeros_like(self.state_memory)
+        self.new_state_memory = np.zeros_like(self.new_state_memory)
+        self.action_memory = np.zeros_like(self.action_memory)
+        self.reward_memory = np.zeros_like(self.reward_memory)
+        self.terminal_memory = np.zeros_like(self.terminal_memory)
 
 
-class PPO_Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5):
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
-        self.device = torch.device("cpu")
+class DDQN_Agent:
+    def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, alpha=0.001, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
+        # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.gamma = gamma
-        self.policy_clip = policy_clip
-        self.n_epochs = n_epochs
-        self.gae_lambda = gae_lambda
+        self.epochs = epochs
         self.mini_batch_size = mini_batch_size
-        self.entropy_coefficient = entropy_coefficient
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.epsilon_dec = epsilon_dec
+        self.epsilon_min = epsilon_end
+        self.alpha = alpha
+        self.action_space = [i for i in range(n_actions)]
+        self.mem_size = mem_size
+        self.batch_size = batch_size
+        self.replace_target_cnt = replace
+        self.learn_step_counter = 0
+        self.weight_decay = weight_decay
         self.l1_lambda = l1_lambda
 
-        # Initialize the actor and critic networks
-        self.actor = ActorNetwork(n_actions, input_dims).to(self.device)
-        self.critic = CriticNetwork(input_dims).to(self.device)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
+        self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
+        self.q_policy = QNetwork(input_dims, n_actions).to(self.device)
+        self.q_target = QNetwork(input_dims, n_actions).to(self.device)
+        self.q_target.load_state_dict(self.q_policy.state_dict())
+        self.q_target.eval()
+        self.optimizer = optim.Adam(self.q_policy.parameters(), lr=self.alpha, weight_decay=weight_decay)
 
-        self.memory = PPOMemory(batch_size)
+    def store_transition(self, state, action, reward, state_, done):
+        self.memory.store_transition(state, action, reward, state_, done)
 
-    def store_transition(self, state, action, probs, vals, reward, done):
-        self.memory.store_memory(state, action, probs, vals, reward, done)
+    def replace_target_network(self):
+        if self.learn_step_counter % self.replace_target_cnt == 0:
+            self.q_target.load_state_dict(self.q_policy.state_dict())
+
+    def decrement_epsilon(self):
+        self.epsilon = self.epsilon - self.epsilon_dec if self.epsilon > self.epsilon_min else self.epsilon_min
 
     def learn(self):
+        if self.memory.mem_cntr < self.batch_size:
+            return
+
         print('Learning... CHECK')
-        self.actor.train()
-        self.critic.train()
+        self.replace_target_network()
 
-        for _ in range(self.n_epochs):
-            # Generating the data for the entire batch
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
+        for epoch in range(self.epochs):
+            states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
 
-            values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
-            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+            num_mini_batches = max(self.batch_size // self.mini_batch_size, 1)
 
-            # Calculating Advantage
-            for t in range(len(reward_arr) - 1):
-                discount = 1
-                a_t = 0
-                for k in range(t, len(reward_arr) - 1):
-                    a_t += discount * (reward_arr[k] + self.gamma * values[k + 1] * (1 - int(dones_arr[k])) - values[k])
-                    discount *= self.gamma * self.gae_lambda
-                advantage[t] = a_t
+            for mini_batch in range(num_mini_batches):
+                start = mini_batch * self.mini_batch_size
+                end = min((mini_batch + 1) * self.mini_batch_size, self.batch_size)
 
-            advantage = torch.tensor(advantage, dtype=torch.float).to(self.device)
+                mini_states = torch.tensor(states[start:end], dtype=torch.float).to(self.device)
+                mini_actions = actions[start:end]
+                mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
+                mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
+                mini_dones = dones[start:end]
 
-            # Creating mini-batches
-            num_samples = len(state_arr)
-            indices = np.arange(num_samples)
-            np.random.shuffle(indices)
-            for start_idx in range(0, num_samples, self.mini_batch_size):
-                # Extract indices for the mini-batch
-                minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
+                self.optimizer.zero_grad()
 
-                # Extract data for the current mini-batch
-                batch_states = torch.tensor(state_arr[minibatch_indices], dtype=torch.float).to(self.device)
-                batch_actions = torch.tensor(action_arr[minibatch_indices], dtype=torch.long).to(self.device)
-                batch_old_probs = torch.tensor(old_prob_arr[minibatch_indices], dtype=torch.float).to(self.device)
-                batch_advantages = advantage[minibatch_indices]
-                batch_values = values[minibatch_indices]
+                q_pred = self.q_policy(mini_states).gather(1, torch.tensor(mini_actions).unsqueeze(-1).to(self.device)).squeeze(-1)
+                q_next = self.q_target(mini_states_).detach()
+                q_eval = self.q_policy(mini_states_).detach()
 
-                self.actor_optimizer.zero_grad()
-                self.critic_optimizer.zero_grad()
+                max_actions = torch.argmax(q_eval, dim=1)
+                q_next[mini_dones] = 0.0
+                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
-                # Actor Network Loss with Entropy Regularization
-                probs = self.actor(batch_states)
-                dist = torch.distributions.Categorical(probs)
-                new_probs = dist.log_prob(batch_actions)
-                prob_ratio = torch.exp(new_probs - batch_old_probs)
-                weighted_probs = batch_advantages * prob_ratio
-                clipped_probs = torch.clamp(prob_ratio, 1 - self.policy_clip, 1 + self.policy_clip)
-                weighted_clipped_probs = clipped_probs * batch_advantages
-                entropy = dist.entropy().mean()  # Entropy of the policy distribution
-                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean() - self.entropy_coefficient * entropy
-                l1_loss_actor = sum(torch.sum(torch.abs(param)) for param in self.actor.parameters())
-                actor_loss += self.l1_lambda * l1_loss_actor
+                # MSE loss
+                loss = F.mse_loss(q_pred, q_target)
 
-                # Critic Network Loss
-                critic_value = self.critic(batch_states).squeeze()
-                returns = batch_advantages + batch_values
-                critic_loss = nn.functional.mse_loss(critic_value, returns)
-                l1_loss_critic = sum(torch.sum(torch.abs(param)) for param in self.critic.parameters())
-                critic_loss += self.l1_lambda * l1_loss_critic
+                # Calculate L1 penalty for all parameters
+                l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
+                total_loss = loss + self.l1_lambda * l1_penalty
 
-                # Gradient Calculation and Optimization Step
-                actor_loss.backward()
-                critic_loss.backward()
-                self.actor_optimizer.step()
-                self.critic_optimizer.step()
+                total_loss.backward()
+                self.optimizer.step()
 
-        # Clear memory
-        self.memory.clear_memory()
+        self.learn_step_counter += 1
+        print('Epsilon decreasing...')
+        self.decrement_epsilon()
 
     def choose_action(self, observation):
+        if np.random.random() > self.epsilon:
+            # Convert the observation to a numpy array if it's not already
+            if not isinstance(observation, np.ndarray):
+                observation = np.array(observation)
+            # Reshape the observation to (1, -1) which means 1 row and as many columns as necessary
+            observation = observation.reshape(1, -1)
+            # Convert the numpy array to a tensor
+            state = torch.tensor(observation, dtype=torch.float).to(self.device)
+            actions = self.q_policy(state)
+            action = torch.argmax(actions).item()
+        else:
+            action = np.random.choice(self.action_space)
+        return action
+
+    def get_action_q_values(self, observation):
         """
-        Selects an action based on the current policy and exploration noise.
+        Returns the Q-values of each action for a given observation.
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = np.array(observation).reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        probs = self.actor(state)
-
-        dist = torch.distributions.Categorical(probs)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        value = self.critic(state)
-
-        return action.item(), log_prob.item(), value.item()
-
-    def get_action_probabilities(self, observation):
-        """
-        Returns the probabilities of each action for a given observation.
-        """
-        observation = np.array(observation).reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        with torch.no_grad():
-            probs = self.actor(state)
-        return probs.cpu().numpy()
-
-    def choose_best_action(self, observation):
-        """
-        Selects the best action based on the current policy without exploration.
-        """
-        if not isinstance(observation, np.ndarray):
-            observation = np.array(observation)
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
         with torch.no_grad():
-            probs = self.actor(state)
+            q_values = self.q_policy(state)
 
-        best_action = torch.argmax(probs, dim=1).item()
+        return q_values.cpu().numpy()
+
+    def choose_best_action(self, observation):
+        """
+        Selects the best action based on the highest Q-value without exploration.
+        """
+        q_values = self.get_action_q_values(observation)
+        best_action = np.argmax(q_values)
         return best_action
+
+    def get_epsilon(self):
+        return self.epsilon
+
+    def get_action_probabilities(self, observation):
+        """
+        Returns the probabilities of each action for a given observation.
+        Converts Q values to a probability distribution using the softmax function.
+        """
+        if not isinstance(observation, np.ndarray):
+            observation = np.array(observation)
+
+        observation = observation.reshape(1, -1)
+        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+
+        with torch.no_grad():
+            q_values = self.q_policy(state)
+            probabilities = F.softmax(q_values, dim=1).cpu().numpy()
+
+        return probabilities.flatten()
 
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
+    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = initial_balance
         self.current_position = 0
         self.variables = variables
-        self.current_positions = current_positions
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
 
-        # Define action and observation space
+        # Define action space: 0 (sell), 1 (hold), 2 (buy)
         self.action_space = spaces.Discrete(3)
-        if self.current_positions:
-            self.observation_space = spaces.Box(low=-np.inf,
-                                                high=np.inf,
-                                                shape=(look_back + 1,),  # +1 for current position
-                                                dtype=np.float32)
-        else:
-            self.observation_space = spaces.Box(low=-np.inf,
-                                                high=np.inf,
-                                                shape=(look_back,),
-                                                dtype=np.float32)
+
+        # Define observation space based on the look_back period and the number of variables
+        self.observation_space = spaces.Box(low=-np.inf,
+                                            high=np.inf,
+                                            shape=(look_back + 1,),  # +1 for current position
+                                            dtype=np.float32)
 
         self.reset()
 
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
         input_dims = num_variables * self.look_back  # Variables times look_back
-        if self.current_positions:
-            input_dims += 1  # Add one more dimension for current position
+        input_dims += 1  # Add one more dimension for current position
         return input_dims
 
-    def reset(self, observation=None):
-        if observation is not None:
-            self.current_step = observation + self.look_back
+    def reset(self, observation_idx=None):
+        if observation_idx is not None:
+            self.current_step = observation_idx + self.look_back
         else:
             self.current_step = self.look_back
 
         self.balance = self.initial_balance
+        self.current_position = 0
         self.done = False
         return self._next_observation()
-
-    def _create_base_observation(self):
-        start = max(self.current_step - self.look_back, 0)
-        end = self.current_step
-        return self.df[self.variables].iloc[start:end].values
 
     def _next_observation(self):
         start = max(self.current_step - self.look_back, 0)
@@ -429,8 +405,7 @@ class Trading_Environment_Basic(gym.Env):
 
             scaled_observation.extend(scaled_data)
 
-        if self.current_positions:
-            scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
+        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
 
         return np.array(scaled_observation)
 
@@ -476,9 +451,8 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        reward += provision * 99  # Add provision to reward
 
-        final_reward = 100 * reward  # Scale reward for better learning
+        final_reward = 400 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -497,10 +471,8 @@ indicators = [
     {"indicator": "Stochastic", "mkf": "EURUSD"},]
 
 add_indicators(df, indicators)
-
-df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2013-01-01'
+start_date = '2008-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -510,38 +482,39 @@ variables = [
     {"variable": ("Close", "USDJPY"), "edit": "normalize"},
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
-window_size = '5Y'
+window_size = '1Y'
 starting_balance = 10000
-look_back = 10
+look_back = 24
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 2048
-epochs = 40 # 40
-mini_batch_size = 128
+batch_size = 256
+epochs = 50 # 40
+mini_batch_size = 256
 leverage = 1
 weight_decay = 0.0005
-l1_lambda = 1e-5
+l1_lambda = 0.00005
+num_episodes = 5  # 100
 # Create the environment
-env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
-agent = PPO_Agent(n_actions=env.action_space.n,
-                  input_dims=env.calculate_input_dims(),
-                  gamma=0.9,
-                  alpha=0.005,  # learning rate for actor network
-                  gae_lambda=0.8,  # lambda for generalized advantage estimation
-                  policy_clip=0.25,  # clip parameter for PPO
-                  entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
-                  batch_size=batch_size,
-                  n_epochs=epochs,
-                  mini_batch_size=mini_batch_size,
-                  weight_decay=weight_decay,
-                  l1_lambda=l1_lambda)
-
-num_episodes = 1000  # 100
+env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
+                   n_actions=env.action_space.n,
+                   epochs=epochs,
+                   mini_batch_size=mini_batch_size,
+                   alpha=0.0005,
+                   gamma=0.95,
+                   epsilon=1.0,
+                   epsilon_dec=1.25/num_episodes,
+                   epsilon_end=0.01,
+                   mem_size=100000,
+                   batch_size=batch_size,
+                   replace=5,  # num_episodes // 4
+                   weight_decay=weight_decay,
+                   l1_lambda=l1_lambda)
 
 total_rewards = []
 episode_durations = []
@@ -562,7 +535,7 @@ for episode in tqdm(range(num_episodes)):
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
     observation = env.reset()
     done = False
@@ -571,14 +544,14 @@ for episode in tqdm(range(num_episodes)):
     initial_balance = env.balance
 
     while not done:
-        action, prob, val = agent.choose_action(observation)
+        action = agent.choose_action(observation)
         observation_, reward, done, info = env.step(action)
-        agent.store_transition(observation, action, prob, val, reward, done)
+        agent.store_transition(observation, action, reward, observation_, done)
         observation = observation_
         cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if len(agent.memory.states) >= agent.memory.batch_size or done:
+        if agent.memory.mem_cntr >= agent.batch_size:
             agent.learn()
             agent.memory.clear_memory()
 
@@ -604,9 +577,9 @@ for episode in tqdm(range(num_episodes)):
 
     # calculate probabilities
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_train = executor.submit(BF.calculate_probabilities_wrapper, df_train, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
-        future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
-        future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_train = executor.submit(calculate_probabilities_wrapper_DQN, df_train, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_validation = executor.submit(calculate_probabilities_wrapper_DQN, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_test = executor.submit(calculate_probabilities_wrapper_DQN, df_test, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
         train_probs = future_train.result()
         validation_probs = future_validation.result()
@@ -623,11 +596,12 @@ for episode in tqdm(range(num_episodes)):
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.3f}")
     print("-----------------------------------")
 
 
 print(backtest_results)
+
 # Plotting the results after all episodes
 import matplotlib.pyplot as plt
 
@@ -650,28 +624,13 @@ plt.xlabel('Episode')
 plt.ylabel('Total Balance')
 plt.show()
 
-# Extracting data for plotting
-validation_pnl = backtest_results.loc[(slice(None), 'validation'), 'Final Balance']
-test_pnl = backtest_results.loc[(slice(None), 'test'), 'Final Balance']
-
-# Creating the plot
-plt.figure(figsize=(10, 6))
-plt.plot(range(num_episodes), validation_pnl.values, label='Validation Total PnL', marker='o')
-plt.plot(range(num_episodes), test_pnl.values, label='Test Total PnL', marker='x')
-
-plt.title('Total PnL Over Episodes')
-plt.xlabel('Episode')
-plt.ylabel('Total PnL')
-plt.legend()
-plt.show()
-
 # final prediction agent
 # predictions and probabilities for train, validation and test calculated in parallel
 with ThreadPoolExecutor() as executor:
     futures = []
     datasets = [df_train, df_validation, df_test]
     for df in datasets:
-        futures.append(executor.submit(BF.process_dataset, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
+        futures.append(executor.submit(process_dataset_DQN, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
 
     results = [future.result() for future in futures]
 
@@ -808,10 +767,10 @@ def update_ohlc_plot(selected_dataset, market='EURUSD'):
 
     return ohlc_fig
 
-app.run_server(debug=True, port=8058)
+app.run_server(debug=True, port=8062)
 
 # Open the web browser
-webbrowser.open("http://127.0.0.1:8058/")
+webbrowser.open("http://127.0.0.1:8062/")
 
 # Prepare the example observation
 observation_window = df_train.iloc[60:60+look_back]
