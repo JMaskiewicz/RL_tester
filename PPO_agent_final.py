@@ -37,7 +37,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
     with torch.no_grad():  # Disable gradient computation for inference
         # Create a validation environment
         validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                                   tradable_markets=tradable_markets, provision=provision,
+                                                   tradable_markets=mkf, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
 
         # Generate Predictions
