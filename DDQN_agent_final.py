@@ -66,13 +66,13 @@ def calculate_probabilities_wrapper_DQN(df, environment_class, agent, look_back,
     return calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
 # TODO add proper backtest function
-def generate_predictions_and_backtest(df, agent, tradable_market, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
     # Switch to evaluation mode
     agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
         validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                                   tradable_markets=tradable_market, provision=provision,
+                                                   tradable_markets=mkf, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
 
         # Generate Predictions
@@ -93,27 +93,38 @@ def generate_predictions_and_backtest(df, agent, tradable_market, look_back, var
         number_of_trades = 0
 
         for i in range(look_back, len(df_with_predictions)):
-            action = df_with_predictions['Predicted_Action'].iloc[i] - 1  # Adjust action for {0, 1, 2} -> {-1, 0, 1}
-            current_price = df_with_predictions[('Close', tradable_market)].iloc[i - 1]
-            next_price = df_with_predictions[('Close', tradable_market)].iloc[i]
+            action = df_with_predictions['Predicted_Action'].iloc[i]
+            current_price = df_with_predictions[('Close', mkf)].iloc[i - 1]
+            next_price = df_with_predictions[('Close', mkf)].iloc[i]
 
             # Calculate log return
-            log_return = np.log(next_price / current_price) if current_price != 0 else 0
-            reward = log_return * action * leverage
+            log_return = math.log(next_price / current_price) if current_price != 0 else 0
+            reward = 0
 
-            # Calculate provision cost if the action changes the position
+            if action == 1:  # Buying
+                reward = log_return
+            elif action == -1:  # Selling
+                reward = -log_return
+
+            # Apply leverage
+            reward *= leverage
+
+            # Calculate cost based on action and current position
             if action != current_position:
-                reward -= provision
+                if abs(action - current_position) == 2:
+                    provision_cost = math.log(1 - 2 * provision)
+                else:
+                    provision_cost = math.log(1 - provision) if action != 0 else 0
                 number_of_trades += 1
+            else:
+                provision_cost = 0
+
+            reward += provision_cost
 
             # Update the balance
-            balance *= (1 + reward)
+            balance *= math.exp(reward)
 
-            # Update the current position
-            current_position = action
-
-            # Accumulate the reward
-            total_reward += reward
+            total_reward = reward * 500  # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -398,31 +409,55 @@ class Trading_Environment_Basic(gym.Env):
         return np.array(scaled_observation)
 
     def step(self, action):
-        # Map action to position change (-1: sell, 0: hold, +1: buy)
+        # Existing action mapping
         action_mapping = {0: -1, 1: 0, 2: 1}
         mapped_action = action_mapping[action]
 
-        # Get current and next price from the tradable market
-        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step - 1]
-        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
+        # Get current and next price
+        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
+        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
-        # Calculate log return and reward based on the action taken
-        log_return = np.log(next_price / current_price) if current_price > 0 else 0
-        reward = log_return * mapped_action * self.leverage  # Apply leverage
+        # Calculate log return based on action
+        log_return = math.log(next_price / current_price) if current_price != 0 else 0
+        reward = 0
 
-        # Apply trading provision cost if action changes the position
+        if mapped_action == 1:  # Buying
+            reward = log_return
+        elif mapped_action == -1:  # Selling
+            reward = -log_return
+
+        # Apply leverage to the base reward
+        reward = reward * self.leverage
+
+        # Calculate cost based on action and current position
         if mapped_action != self.current_position:
-            reward -= self.provision
+            if abs(mapped_action - self.current_position) == 2:
+                provision = math.log(1 - 2 * self.provision)
+            else:
+                provision = math.log(1 - self.provision)
+        else:
+            provision = 0
 
-        # Update balance, position, and step
-        self.balance *= (1 + reward)
+        reward += provision
+
+        # Update the balance
+        self.balance *= math.exp(reward)  # Update balance using exponential of reward before applying other penalties
+
+        # Update current position and step
         self.current_position = mapped_action
         self.current_step += 1
+        """
+        multiple reward by X to make it more significant and to make it easier for the agent to learn, 
+        without this the agent would not learn as the reward is too close to 0
+        """
+
+        final_reward = 500 * reward
 
         # Check if the episode is done
-        self.done = self.current_step >= len(self.df)
+        if self.current_step >= len(self.df) - 1:
+            self.done = True
 
-        return self._next_observation(), reward, self.done, {}
+        return self._next_observation(), final_reward, self.done, {}
 
 # Example usage
 # Stock market variables
@@ -435,10 +470,8 @@ indicators = [
     {"indicator": "Stochastic", "mkf": "EURUSD"},]
 
 add_indicators(df, indicators)
-
-df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 df = df.dropna()
-start_date = '2015-01-01'
+start_date = '2008-01-01'
 validation_date = '2021-01-01'
 test_date = '2022-01-01'
 df_train = df[start_date:validation_date]
@@ -448,22 +481,22 @@ variables = [
     {"variable": ("Close", "USDJPY"), "edit": "normalize"},
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
-window_size = '10Y'
+window_size = '20Y'
 starting_balance = 10000
 look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 10  # 40
+epochs = 50  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.000005
-l1_lambda = 0.000005
+weight_decay = 0.0005
+l1_lambda = 0.00005
 num_episodes = 100  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -474,7 +507,7 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    alpha=0.0005,
                    gamma=0.95,
                    epsilon=1.0,
-                   epsilon_dec=1.5/num_episodes,
+                   epsilon_dec=1.25/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
                    batch_size=batch_size,

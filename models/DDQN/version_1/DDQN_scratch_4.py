@@ -130,7 +130,7 @@ random.seed(0)
 
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=0.125):
+    def __init__(self, input_dims, n_actions, dropout_rate=1/64):
         super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 2048)
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -453,7 +453,7 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 10  # 40
+epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.000005
@@ -468,11 +468,11 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    alpha=0.0005,
                    gamma=0.95,
                    epsilon=1.0,
-                   epsilon_dec=1.5/num_episodes,
+                   epsilon_dec=1.25/num_episodes,
                    epsilon_end=0.01,
                    mem_size=100000,
                    batch_size=batch_size,
-                   replace=10,
+                   replace=5,
                    weight_decay=weight_decay,
                    l1_lambda=l1_lambda)
 
