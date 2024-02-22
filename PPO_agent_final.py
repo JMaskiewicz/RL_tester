@@ -50,7 +50,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
 
         # Backtesting
         balance = initial_balance
@@ -79,18 +79,22 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             if action != current_position:
                 if abs(action - current_position) == 2:
                     provision_cost = math.log(1 - 2 * provision)
+                    number_of_trades += 2
                 else:
                     provision_cost = math.log(1 - provision) if action != 0 else 0
-                number_of_trades += 1
+                    number_of_trades += 1
             else:
                 provision_cost = 0
 
             reward += provision_cost
 
+            # Update the position
+            current_position = action
+
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward  # Scale reward for better learning
+            total_reward += 1000 * reward  # Scale reward for better learning
 
     # Ensure the agent's networks are back in training mode after evaluation
     agent.actor.train()
@@ -153,13 +157,13 @@ class PPOMemory:
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, dropout_rate=1/16):
         super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.bn1 = nn.BatchNorm1d(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.bn2 = nn.BatchNorm1d(512)
-        self.fc3 = nn.Linear(512, 256)
-        self.bn3 = nn.BatchNorm1d(256)
-        self.fc4 = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.bn1 = nn.BatchNorm1d(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.bn2 = nn.BatchNorm1d(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.bn3 = nn.BatchNorm1d(512)
+        self.fc4 = nn.Linear(512, n_actions)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
@@ -191,13 +195,13 @@ class ActorNetwork(nn.Module):
 class CriticNetwork(nn.Module):
     def __init__(self, input_dims, dropout_rate=1/16):
         super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.bn1 = nn.BatchNorm1d(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.bn2 = nn.BatchNorm1d(512)
-        self.fc3 = nn.Linear(512, 256)
-        self.bn3 = nn.BatchNorm1d(256)
-        self.fc4 = nn.Linear(256, 1)
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.bn1 = nn.BatchNorm1d(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.bn2 = nn.BatchNorm1d(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.bn3 = nn.BatchNorm1d(512)
+        self.fc4 = nn.Linear(512, 1)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -476,9 +480,8 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        reward += provision * 99  # Add provision to reward
 
-        final_reward = 100 * reward  # Scale reward for better learning
+        final_reward = 1000 * reward  # Scale reward for better learning
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -510,18 +513,18 @@ variables = [
     {"variable": ("Close", "USDJPY"), "edit": "normalize"},
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-    {"variable": ("RSI_14", "EURUSD"), "edit": "None"},
+    {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
     {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
 ]
 tradable_markets = 'EURUSD'
-window_size = '5Y'
+window_size = '1Y'
 starting_balance = 10000
 look_back = 10
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 40 # 40
+epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
@@ -578,7 +581,7 @@ for episode in tqdm(range(num_episodes)):
         cumulative_reward += reward
 
         # Check if enough data is collected or if the dataset ends
-        if len(agent.memory.states) >= agent.memory.batch_size or done:
+        if len(agent.memory.states) >= agent.memory.batch_size: # or done:
             agent.learn()
             agent.memory.clear_memory()
 

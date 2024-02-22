@@ -6,7 +6,7 @@ DDQN 2.1
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- try TFT transformer (Temporal Fusion Transformers transformer time series)
+- try transformer or TFT transformer (Temporal Fusion Transformers transformer time series)
 
 """
 import numpy as np
@@ -71,21 +71,20 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
     agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
                                                    tradable_markets=mkf, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
 
         # Generate Predictions
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - validation_env.look_back):
-            observation = validation_env.reset()
-            action = agent.choose_best_action(observation)  # choose_best_action
-            action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + validation_env.look_back] = action
+        for observation_idx in range(len(df) - env.look_back):
+            observation = env.reset(observation_idx)
+            action = agent.choose_best_action(observation)
+            predictions_df.iloc[observation_idx + env.look_back] = action
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
+        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
         # Backtesting
         balance = initial_balance
@@ -114,18 +113,22 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             if action != current_position:
                 if abs(action - current_position) == 2:
                     provision_cost = math.log(1 - 2 * provision)
+                    number_of_trades += 2
                 else:
                     provision_cost = math.log(1 - provision) if action != 0 else 0
-                number_of_trades += 1
+                    number_of_trades += 1
             else:
                 provision_cost = 0
 
             reward += provision_cost
 
+            # Update the position
+            current_position = action
+
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * 100  # Scale reward for better learning
+            total_reward += reward * 1000  # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -169,6 +172,7 @@ class DuelingQNetwork(nn.Module):
         q_values = val + (adv - adv.mean(dim=1, keepdim=True))
 
         return q_values
+
 class ReplayBuffer:
     def __init__(self, max_size, input_shape, n_actions):
         self.mem_size = max_size
@@ -458,7 +462,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 100 * reward
+        final_reward = 1000 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -494,17 +498,17 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 12
+look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 1024
-epochs = 1  # 40
+epochs = 10  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 0.00005
-num_episodes = 100  # 100
+num_episodes = 1000  # at 500 starts over fitting probably
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
@@ -513,10 +517,10 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    mini_batch_size=mini_batch_size,
                    policy_alpha=0.001,
                    target_alpha=0.0005,
-                   gamma=0.95,
+                   gamma=0.9,
                    epsilon=1.0,
-                   epsilon_dec=0.9,
-                   epsilon_end=0.01,
+                   epsilon_dec=0.95,
+                   epsilon_end=0,
                    mem_size=100000,
                    batch_size=batch_size,
                    replace=5,  # num_episodes // 4

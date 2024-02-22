@@ -1,5 +1,5 @@
 """
-DDQN 2.2 transformer network
+DDQN 2.1
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -22,8 +22,6 @@ import gym
 from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from data.function.load_data import load_data
@@ -127,7 +125,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * 250  # Scale reward for better learning
+            total_reward += reward * 500  # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -143,54 +141,27 @@ np.random.seed(0)
 random.seed(0)
 
 
-class TransformerDuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, n_heads=4, n_encoder_layers=3, dropout_rate=0.1):
-        super(TransformerDuelingQNetwork, self).__init__()
-
-        self.n_heads = n_heads
-        self.input_dims = input_dims  # Assuming input_dims is a tuple (time_series_length, num_features)
-        self.time_series_length = self.input_dims[0]
-        self.num_features = self.input_dims[1] - 1  # Excluding the static variable
-
-        # Transformer Encoder for time series features
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.num_features,
-            nhead=self.n_heads,
-            dropout=dropout_rate
-        )
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_encoder_layers)
-
-        # Fully connected layer for combining transformer output and static variable
-        self.fc1 = nn.Linear(self.num_features + 1, 512)  # +1 for the static variable
-
-        # Dueling network streams
-        self.fc_value = nn.Linear(512, 256)
-        self.value = nn.Linear(256, 1)  # Output a single value V(s)
-        self.fc_advantage = nn.Linear(512, 256)
-        self.advantage = nn.Linear(256, n_actions)  # Output advantage for each action A(s,a)
+class DuelingQNetwork(nn.Module):
+    def __init__(self, input_dims, n_actions, dropout_rate=0.125):
+        super(DuelingQNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_dims, 2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc_value = nn.Linear(1024, 512)
+        self.value = nn.Linear(512, 1)
+        self.fc_advantage = nn.Linear(1024, 512)
+        self.advantage = nn.Linear(512, n_actions)
 
     def forward(self, state):
-        # Assuming state is of shape [batch_size, time_series_length + 1, num_features]
-        # where the last feature of each time step is the static variable
+        x = F.relu(self.fc1(state))
+        x = self.dropout1(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout2(x)
 
-        # Separate time series data and static variable
-        time_series_data = state[:, :-1, :-1]  # Shape: [batch_size, time_series_length, num_features]
-        static_variable = state[:, 0, -1].unsqueeze(-1)  # Shape: [batch_size, 1]
-
-        # Process time series through transformer
-        transformer_output = self.transformer_encoder(time_series_data.permute(1, 0, 2))
-        transformer_output = transformer_output.mean(dim=0)  # Aggregate the output features
-
-        # Combine transformer output with static variable
-        combined_features = torch.cat((transformer_output, static_variable), dim=1)
-
-        x = F.relu(self.fc1(combined_features))
-
-        # Value stream
         val = F.relu(self.fc_value(x))
         val = self.value(val)
 
-        # Advantage stream
         adv = F.relu(self.fc_advantage(x))
         adv = self.advantage(adv)
 
@@ -259,8 +230,8 @@ class DDQN_Agent:
         self.l1_lambda = l1_lambda
 
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
-        self.q_policy = TransformerDuelingQNetwork(input_dims, n_actions).to(self.device)
-        self.q_target = TransformerDuelingQNetwork(input_dims, n_actions).to(self.device)
+        self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
+        self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
         self.q_target.eval()
 
@@ -408,9 +379,10 @@ class Trading_Environment_Basic(gym.Env):
         self.reset()
 
     def calculate_input_dims(self):
-        num_variables = len(self.variables)  # Number of variables, assuming this includes time series variables only
-        time_series_length = self.look_back  # Assuming this represents the length of your time series
-        return (time_series_length, num_variables + 1)  # +1 for the static variable
+        num_variables = len(self.variables)  # Number of variables
+        input_dims = num_variables * self.look_back  # Variables times look_back
+        input_dims += 1  # Add one more dimension for current position
+        return input_dims
 
     def reset(self, observation_idx=None):
         if observation_idx is not None:
@@ -487,7 +459,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 250 * reward
+        final_reward = 500 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -523,7 +495,7 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 12
+look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
@@ -533,7 +505,7 @@ mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
 l1_lambda = 0.00005
-num_episodes = 100  # 100
+num_episodes = 1000  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
@@ -542,10 +514,10 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    mini_batch_size=mini_batch_size,
                    policy_alpha=0.001,
                    target_alpha=0.0005,
-                   gamma=0.95,
+                   gamma=0.9,
                    epsilon=1.0,
-                   epsilon_dec=0.9,
-                   epsilon_end=0.01,
+                   epsilon_dec=0.99,
+                   epsilon_end=0,
                    mem_size=100000,
                    batch_size=batch_size,
                    replace=5,  # num_episodes // 4
