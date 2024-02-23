@@ -108,51 +108,48 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
+# TODO use deque instead of list
 class PPOMemory:
-    def __init__(self, batch_size, device):
-        self.states = None
-        self.probs = None
-        self.actions = None
-        self.vals = None
-        self.rewards = None
-        self.dones = None
-        self.batch_size = batch_size
-        self.clear_memory()
+    def __init__(self, batch_size):
+        self.states = []
+        self.probs = []
+        self.vals = []
+        self.actions = []
+        self.rewards = []
+        self.dones = []
 
-        self.device = device
+        self.batch_size = batch_size
 
     def generate_batches(self):
         n_states = len(self.states)
-        batch_start = torch.arange(0, n_states, self.batch_size)
-        indices = torch.arange(n_states, dtype=torch.int64)
-        indices = indices[torch.randperm(n_states)]  # Shuffle indices
+        batch_start = np.arange(0, n_states, self.batch_size)
+        indices = np.arange(n_states, dtype=np.int64)
+        np.random.shuffle(indices)
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
+        return np.array(self.states), \
+            np.array(self.actions), \
+            np.array(self.probs), \
+            np.array(self.vals), \
+            np.array(self.rewards), \
+            np.array(self.dones), \
+            batches
 
     def store_memory(self, state, action, probs, vals, reward, done):
-        self.states.append(torch.tensor(state, dtype=torch.float).unsqueeze(0))
-        self.actions.append(torch.tensor(action, dtype=torch.long).unsqueeze(0))
-        self.probs.append(torch.tensor(probs, dtype=torch.float).unsqueeze(0))
-        self.vals.append(torch.tensor(vals, dtype=torch.float).unsqueeze(0))
-        self.rewards.append(torch.tensor(reward, dtype=torch.float).unsqueeze(0))
-        self.dones.append(torch.tensor(done, dtype=torch.bool).unsqueeze(0))
+        self.states.append(state)
+        self.actions.append(action)
+        self.probs.append(probs)
+        self.vals.append(vals)
+        self.rewards.append(float(reward))
+        self.dones.append(done)
 
     def clear_memory(self):
         self.states = []
         self.probs = []
         self.actions = []
-        self.vals = []
         self.rewards = []
         self.dones = []
-
-    def stack_tensors(self):
-        self.states = torch.cat(self.states, dim=0).to(self.device)
-        self.actions = torch.cat(self.actions, dim=0).to(self.device)
-        self.probs = torch.cat(self.probs, dim=0).to(self.device)
-        self.vals = torch.cat(self.vals, dim=0).to(self.device)
-        self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
-        self.dones = torch.cat(self.dones, dim=0).to(self.device)
+        self.vals = []
 
 # TODO rework network into TFT transformer network
 class ActorNetwork(nn.Module):
@@ -231,8 +228,8 @@ class CriticNetwork(nn.Module):
 
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
-        # self.device = torch.device("cpu")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
+        self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma
         self.policy_clip = policy_clip
@@ -248,7 +245,7 @@ class PPO_Agent:
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
-        self.memory = PPOMemory(batch_size, self.device)
+        self.memory = PPOMemory(batch_size)
 
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -258,25 +255,12 @@ class PPO_Agent:
         self.actor.train()
         self.critic.train()
 
-        self.memory.stack_tensors()
-
         for _ in range(self.n_epochs):
             # Generating the data for the entire batch
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
 
-            # Convert arrays to tensors and move to the device here, instead of in PPOMemory
-            state_arr = state_arr.clone().detach().to(self.device)
-            action_arr = action_arr.clone().detach().to(self.device)
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)
-            vals_arr = vals_arr.clone().detach().to(self.device)
-            reward_arr = reward_arr.clone().detach().to(self.device)
-            dones_arr = dones_arr.clone().detach().to(self.device)
-
             # Convert arrays to tensors
-            if isinstance(vals_arr, torch.Tensor):
-                values = vals_arr.clone().detach().to(self.device)
-            else:
-                values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
+            values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
 
             # Compute advantages and discounted rewards using the new vectorized method
             advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.numpy(), dones_arr)
@@ -293,9 +277,9 @@ class PPO_Agent:
                 minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
 
                 # Extract data for the current mini-batch
-                batch_states = state_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_actions = action_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
+                batch_states = torch.tensor(state_arr[minibatch_indices], dtype=torch.float).to(self.device)
+                batch_actions = torch.tensor(action_arr[minibatch_indices], dtype=torch.long).to(self.device)
+                batch_old_probs = torch.tensor(old_prob_arr[minibatch_indices], dtype=torch.float).to(self.device)
                 batch_advantages = advantages[minibatch_indices]
                 batch_returns = discounted_rewards[minibatch_indices]
 
@@ -338,9 +322,6 @@ class PPO_Agent:
         discounted_rewards = np.zeros_like(rewards)
         advantages = np.zeros_like(rewards)
         last_gae_lam = 0
-
-        # Convert dones to float here
-        dones = dones.float()
 
         for t in reversed(range(n)):
             if t == n - 1:
@@ -548,7 +529,7 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 10  # 40
+epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.00001
@@ -568,7 +549,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 1000  # 100
+num_episodes = 100  # 100
 
 total_rewards = []
 episode_durations = []
