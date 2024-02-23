@@ -128,7 +128,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * 1000  # Scale reward for better learning
+            total_reward += 300 * reward   # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -462,7 +462,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 1000 * reward
+        final_reward = 300 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -499,11 +499,11 @@ tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 20
-provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.0000000001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 1024
-epochs = 10  # 40
+batch_size = 2048
+epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
 weight_decay = 0.0005
@@ -519,7 +519,7 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    target_alpha=0.0005,
                    gamma=0.9,
                    epsilon=1.0,
-                   epsilon_dec=0.95,
+                   epsilon_dec=0.99,
                    epsilon_end=0,
                    mem_size=100000,
                    batch_size=batch_size,

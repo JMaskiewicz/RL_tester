@@ -35,26 +35,24 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
     agent.critic.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        # Create a validation environment
-        validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
                                                    tradable_markets=mkf, provision=provision,
                                                    initial_balance=initial_balance, leverage=leverage)
 
         # Generate Predictions
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - validation_env.look_back):
-            observation = validation_env.reset(validation_observation)
-            action = agent.choose_best_action(observation)  # choose_best_action
-            action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + validation_env.look_back] = action
+        for observation_idx in range(len(df) - env.look_back):
+            observation = env.reset(observation_idx)
+            action = agent.choose_best_action(observation)
+            predictions_df.iloc[observation_idx + env.look_back] = action
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
+        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
 
         # Backtesting
         balance = initial_balance
-        current_position = 0  # -1 (sell), 0 (hold), 1 (buy)
+        current_position = 0  # Neutral position
         total_reward = 0  # Initialize total reward
         number_of_trades = 0
 
@@ -367,54 +365,45 @@ class PPO_Agent:
 
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, current_positions=True, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
+    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
         self.initial_balance = initial_balance
         self.current_position = 0
         self.variables = variables
-        self.current_positions = current_positions
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
 
-        # Define action and observation space
+        # Define action space: 0 (sell), 1 (hold), 2 (buy)
         self.action_space = spaces.Discrete(3)
-        if self.current_positions:
-            self.observation_space = spaces.Box(low=-np.inf,
-                                                high=np.inf,
-                                                shape=(look_back + 1,),  # +1 for current position
-                                                dtype=np.float32)
-        else:
-            self.observation_space = spaces.Box(low=-np.inf,
-                                                high=np.inf,
-                                                shape=(look_back,),
-                                                dtype=np.float32)
+
+        # Define observation space based on the look_back period and the number of variables
+        self.observation_space = spaces.Box(low=-np.inf,
+                                            high=np.inf,
+                                            shape=(look_back + 1,),  # +1 for current position
+                                            dtype=np.float32)
 
         self.reset()
 
     def calculate_input_dims(self):
         num_variables = len(self.variables)  # Number of variables
         input_dims = num_variables * self.look_back  # Variables times look_back
-        if self.current_positions:
-            input_dims += 1  # Add one more dimension for current position
+        input_dims += 1  # Add one more dimension for current position
         return input_dims
 
-    def reset(self, observation=None):
-        if observation is not None:
-            self.current_step = observation + self.look_back
+    def reset(self, observation_idx=None):
+        if observation_idx is not None:
+            self.current_step = observation_idx + self.look_back
         else:
             self.current_step = self.look_back
 
         self.balance = self.initial_balance
+        self.current_position = 0
         self.done = False
         return self._next_observation()
 
-    def _create_base_observation(self):
-        start = max(self.current_step - self.look_back, 0)
-        end = self.current_step
-        return self.df[self.variables].iloc[start:end].values
 
     def _next_observation(self):
         start = max(self.current_step - self.look_back, 0)
@@ -433,8 +422,7 @@ class Trading_Environment_Basic(gym.Env):
 
             scaled_observation.extend(scaled_data)
 
-        if self.current_positions:
-            scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
+        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
 
         return np.array(scaled_observation)
 
@@ -481,7 +469,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 1000 * reward  # Scale reward for better learning
+        final_reward = reward  # Scale reward for better learning
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -524,13 +512,13 @@ provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 2048
-epochs = 1  # 40
+epochs = 5  # 40
 mini_batch_size = 128
 leverage = 1
-weight_decay = 0.0005
-l1_lambda = 1e-5
+weight_decay = 0.00001
+l1_lambda = 1e-7
 # Create the environment
-env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
@@ -544,7 +532,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 1000  # 100
+num_episodes = 20  # 100
 
 total_rewards = []
 episode_durations = []
@@ -565,7 +553,7 @@ for episode in tqdm(range(num_episodes)):
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, current_positions=True, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
     observation = env.reset()
     done = False
