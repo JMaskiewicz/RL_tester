@@ -280,8 +280,8 @@ class PPO_Agent:
 
             # Compute advantages and discounted rewards using the new vectorized method
             advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.cpu().numpy(), dones_arr)
-            advantages = torch.tensor(advantages, dtype=torch.float).to(self.device)
-            discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float).to(self.device)
+            advantages = advantages.clone().detach().to(self.device)
+            discounted_rewards = discounted_rewards.clone().detach().to(self.device)
 
             # Creating mini-batches
             num_samples = len(state_arr)
@@ -331,15 +331,12 @@ class PPO_Agent:
         self.memory.clear_memory()
 
     def compute_discounted_rewards(self, rewards, values, dones):
-        """
-        Compute discounted rewards and advantages in a vectorized manner.
-        """
         n = len(rewards)
-        discounted_rewards = np.zeros_like(rewards)
-        advantages = np.zeros_like(rewards)
+        discounted_rewards = torch.zeros_like(rewards)
+        advantages = torch.zeros_like(rewards)
         last_gae_lam = 0
 
-        # Convert dones to float here
+        # Convert 'dones' to a float tensor
         dones = dones.float()
 
         for t in reversed(range(n)):
@@ -547,7 +544,7 @@ look_back = 20
 provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 2048
+batch_size = 1024
 epochs = 1  # 40
 mini_batch_size = 128
 leverage = 1
@@ -568,7 +565,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 50  # 100
+num_episodes = 1000  # 100
 
 total_rewards = []
 episode_durations = []
