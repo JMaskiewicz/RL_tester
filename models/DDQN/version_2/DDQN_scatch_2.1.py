@@ -499,15 +499,16 @@ tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 20
-provision = 0.0000000001  # 0.001, cant be too high as it would not learn to trade
+# Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 2048
-epochs = 1  # 40
-mini_batch_size = 128
-leverage = 1
-weight_decay = 0.0005
-l1_lambda = 0.00005
+batch_size = 512
+epochs = 10  # 40
+mini_batch_size = 64
+leverage = 30
+weight_decay = 0.00005
+l1_lambda = 0.000005
 num_episodes = 1000  # at 500 starts over fitting probably
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)

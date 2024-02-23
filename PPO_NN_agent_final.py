@@ -541,21 +541,22 @@ tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 20
-provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+# Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+provision = 0.0001  # 0.001, cant be too high as it would not learn to tradede
 
 # Training parameters
-batch_size = 1024
+batch_size = 512
 epochs = 1  # 40
-mini_batch_size = 128
+mini_batch_size = 64
 leverage = 1
-weight_decay = 0.00001
+weight_decay = 0.00005
 l1_lambda = 1e-7
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.005,  # learning rate for actor network
+                  alpha=0.001,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                   policy_clip=0.25,  # clip parameter for PPO
                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration

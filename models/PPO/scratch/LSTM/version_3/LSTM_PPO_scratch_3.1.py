@@ -22,6 +22,7 @@ import gym
 from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
+import torch.nn.functional as F
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
@@ -108,7 +109,7 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-class PPOMemory:
+class PPOMemory_LSTM:
     def __init__(self, batch_size, device):
         self.states = None
         self.probs = None
@@ -116,6 +117,7 @@ class PPOMemory:
         self.vals = None
         self.rewards = None
         self.dones = None
+        self.static_inputs = None  # Container for static inputs
         self.batch_size = batch_size
         self.clear_memory()
 
@@ -125,18 +127,19 @@ class PPOMemory:
         n_states = len(self.states)
         batch_start = torch.arange(0, n_states, self.batch_size)
         indices = torch.arange(n_states, dtype=torch.int64)
-        indices = indices[torch.randperm(n_states)]  # Shuffle indices
+        indices = indices[torch.randperm(n_states)]
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
+        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_inputs, batches
 
-    def store_memory(self, state, action, probs, vals, reward, done):
+    def store_memory(self, state, action, probs, vals, reward, done, static_input):
         self.states.append(torch.tensor(state, dtype=torch.float).unsqueeze(0))
         self.actions.append(torch.tensor(action, dtype=torch.long).unsqueeze(0))
         self.probs.append(torch.tensor(probs, dtype=torch.float).unsqueeze(0))
         self.vals.append(torch.tensor(vals, dtype=torch.float).unsqueeze(0))
         self.rewards.append(torch.tensor(reward, dtype=torch.float).unsqueeze(0))
         self.dones.append(torch.tensor(done, dtype=torch.bool).unsqueeze(0))
+        self.static_inputs.append(torch.tensor(static_input, dtype=torch.float).unsqueeze(0))
 
     def clear_memory(self):
         self.states = []
@@ -145,6 +148,7 @@ class PPOMemory:
         self.vals = []
         self.rewards = []
         self.dones = []
+        self.static_inputs = []
 
     def stack_tensors(self):
         self.states = torch.cat(self.states, dim=0).to(self.device)
@@ -153,80 +157,126 @@ class PPOMemory:
         self.vals = torch.cat(self.vals, dim=0).to(self.device)
         self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
         self.dones = torch.cat(self.dones, dim=0).to(self.device)
+        self.static_inputs = torch.cat(self.static_inputs, dim=0).to(self.device)
 
-# TODO rework network into TFT transformer network
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, dropout_rate=1/16):
-        super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, n_actions)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
-        self.softmax = nn.Softmax(dim=-1)
+class SelfAttention(nn.Module):
+    def __init__(self, hidden_size):
+        super(SelfAttention, self).__init__()
+        self.projection = nn.Sequential(
+            nn.Linear(hidden_size, 2048),
+            nn.ReLU(True),
+            nn.Dropout(1/16),
+            nn.Linear(2048, 1024),
+            nn.ReLU(True),
+            nn.Dropout(1/16),
+            nn.Linear(1024, 512),
+            nn.ReLU(True),
+            nn.Dropout(1 / 16),
+            nn.Linear(512, 256),
+            nn.ReLU(True),
+            nn.Dropout(1/16),
+            nn.Linear(256, 1)
+        )
 
-    def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
+    def forward(self, lstm_output):
+        energy = self.projection(lstm_output)
+        weights = F.softmax(energy, dim=1)
+        outputs = (lstm_output * weights.unsqueeze(-1)).sum(dim=1)
+        return outputs, weights
 
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
 
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
+class LSTM_NetworkBase(nn.Module):
+    def __init__(self, input_dims, static_dim, hidden_size=2048, n_layers=2):
+        super(LSTM_NetworkBase, self).__init__()
+        self.lstm = nn.LSTM(input_size=input_dims, hidden_size=hidden_size,
+                            batch_first=True, num_layers=n_layers, dropout=0.2)
+        self.self_attention = SelfAttention(hidden_size + static_dim)
 
-        x = self.fc4(x)
-        x = self.softmax(x)
-        return x
+    def forward(self, state, static_input):
+        lstm_output, _ = self.lstm(state)
+        if lstm_output.dim() == 2:
+            lstm_output = lstm_output.unsqueeze(0)
 
-# TODO rework network into transformer network
-class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, dropout_rate=1/16):
-        super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 1)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
+        # Process static input
+        batch_size, seq_len, _ = lstm_output.shape
+        static_input = static_input.unsqueeze(-1)
+        static_input_expanded = static_input.expand(batch_size, seq_len, -1)
 
-    def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
+        # Combine LSTM output and static input
+        combined_input = torch.cat((lstm_output, static_input_expanded), dim=2)
+        attention_output, _ = self.self_attention(combined_input)
 
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
+        return attention_output
 
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
 
-        q = self.fc4(x)
-        return q
+class LSTM_ActorNetwork(LSTM_NetworkBase):
+    def __init__(self, n_actions, input_dims, static_dim, hidden_size=2048, dropout=1/16):
+        super(LSTM_ActorNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        self.fc1 = nn.Sequential(
+            nn.Linear(hidden_size + static_dim, 2048),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(2048, 1024),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        self.policy = nn.Linear(256, n_actions)
+
+    def forward(self, state, static_input):
+        attention_output = super().forward(state, static_input).squeeze(0)
+        x = self.fc1(attention_output)
+        action_probs = torch.softmax(self.policy(x), dim=-1)
+        return action_probs
+
+
+class LSTM_CriticNetwork(LSTM_NetworkBase):
+    def __init__(self, input_dims, static_dim, hidden_size=2048, dropout=1/16):
+        super(LSTM_CriticNetwork, self).__init__(input_dims, static_dim, hidden_size)
+        self.fc1 = nn.Sequential(
+            nn.Linear(hidden_size + static_dim, 2048),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(2048, 1024),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        self.value = nn.Linear(256, 1)
+
+    def forward(self, state, static_input):
+        attention_output = super().forward(state, static_input).squeeze(0)
+        x = self.fc1(attention_output)
+        value = self.value(x)
+        return value
 
 
 class PPO_Agent:
@@ -241,14 +291,15 @@ class PPO_Agent:
         self.mini_batch_size = mini_batch_size
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
+        self.static_dim = 1
 
         # Initialize the actor and critic networks
-        self.actor = ActorNetwork(n_actions, input_dims).to(self.device)
-        self.critic = CriticNetwork(input_dims).to(self.device)
+        self.actor = LSTM_ActorNetwork(n_actions, input_dims, self.static_dim).to(self.device)
+        self.critic = LSTM_CriticNetwork(input_dims, self.static_dim).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
-        self.memory = PPOMemory(batch_size, self.device)
+        self.memory = PPOMemory_LSTM(batch_size, self.device)
 
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -258,52 +309,41 @@ class PPO_Agent:
         self.actor.train()
         self.critic.train()
 
-        self.memory.stack_tensors()
+        self.memory.stack_tensors()  # Ensure this function is compatible with sequences
 
         for _ in range(self.n_epochs):
-            # Generating the data for the entire batch
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_inputs_arr = self.memory.generate_batches()
 
-            # Convert arrays to tensors and move to the device here, instead of in PPOMemory
-            state_arr = state_arr.clone().detach().to(self.device)
-            action_arr = action_arr.clone().detach().to(self.device)
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)
-            vals_arr = vals_arr.clone().detach().to(self.device)
-            reward_arr = reward_arr.clone().detach().to(self.device)
-            dones_arr = dones_arr.clone().detach().to(self.device)
+            # Ensure all tensors are on the correct device
+            state_arr = state_arr.to(self.device)
+            action_arr = action_arr.to(self.device)
+            old_prob_arr = old_prob_arr.to(self.device)
+            vals_arr = vals_arr.to(self.device)
+            reward_arr = reward_arr.to(self.device)
+            dones_arr = dones_arr.to(self.device)
+            static_inputs_arr = static_inputs_arr.to(self.device)
 
-            # Convert arrays to tensors
-            if isinstance(vals_arr, torch.Tensor):
-                values = vals_arr.clone().detach().to(self.device)
-            else:
-                values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
+            values = vals_arr.clone().detach()
 
-            # Compute advantages and discounted rewards using the new vectorized method
-            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.cpu().numpy(), dones_arr)
-            advantages = advantages.clone().detach().to(self.device)
-            discounted_rewards = discounted_rewards.clone().detach().to(self.device)
+            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.cpu().numpy(),
+                                                                             dones_arr)
+            advantages = advantages.to(self.device)
+            discounted_rewards = discounted_rewards.to(self.device)
 
-            # Creating mini-batches
-            num_samples = len(state_arr)
-            indices = np.arange(num_samples)
-            np.random.shuffle(indices)
-
-            for start_idx in range(0, num_samples, self.mini_batch_size):
-                # Extract indices for the mini-batch
-                minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
-
-                # Extract data for the current mini-batch
-                batch_states = state_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_actions = action_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
+            for start_idx in range(0, len(state_arr), self.mini_batch_size):
+                minibatch_indices = torch.arange(start_idx, min(start_idx + self.mini_batch_size, len(state_arr)))
+                batch_states = state_arr[minibatch_indices]
+                batch_actions = action_arr[minibatch_indices]
+                batch_old_probs = old_prob_arr[minibatch_indices]
                 batch_advantages = advantages[minibatch_indices]
                 batch_returns = discounted_rewards[minibatch_indices]
+                batch_static_inputs = static_inputs_arr[minibatch_indices]
 
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
 
-                # Actor Network Loss with Entropy Regularization
-                probs = self.actor(batch_states)
+                # Pass both dynamic and static inputs to the networks
+                probs = self.actor(batch_states, batch_static_inputs)
                 dist = torch.distributions.Categorical(probs)
                 new_probs = dist.log_prob(batch_actions)
                 prob_ratio = torch.exp(new_probs - batch_old_probs)
@@ -316,7 +356,7 @@ class PPO_Agent:
                 actor_loss += self.l1_lambda * l1_loss_actor
 
                 # Critic Network Loss
-                critic_value = self.critic(batch_states).squeeze()
+                critic_value = self.critic(batch_states, batch_static_inputs).squeeze()
                 critic_loss = nn.functional.mse_loss(critic_value, batch_returns)
                 l1_loss_critic = sum(torch.sum(torch.abs(param)) for param in self.critic.parameters())
                 critic_loss += self.l1_lambda * l1_loss_critic
@@ -353,47 +393,57 @@ class PPO_Agent:
 
         return advantages, discounted_rewards
 
-    def choose_action(self, observation):
-        """
-        Selects an action based on the current policy and exploration noise.
-        """
+    def choose_action(self, observation, static_input):
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = np.array(observation).reshape(1, -1)
+        observation = observation.reshape(1, -1)
+        static_input = torch.tensor([static_input], dtype=torch.float).to(self.device)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        probs = self.actor(state)
+        probs = self.actor(state, static_input)
 
         dist = torch.distributions.Categorical(probs)
         action = dist.sample()
         log_prob = dist.log_prob(action)
-        value = self.critic(state)
+        value = self.critic(state, static_input)
 
         return action.item(), log_prob.item(), value.item()
 
-    def get_action_probabilities(self, observation):
+    def get_action_probabilities(self, observation, static_input):
         """
         Returns the probabilities of each action for a given observation.
+        Observation should be formatted as a sequence for the LSTM.
+        Static input should be provided if the network expects additional context.
         """
-        observation = np.array(observation).reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        # Convert the observation to a PyTorch tensor and add required dimensions (batch and sequence)
+        # Assuming observation is a sequence of observations suitable for LSTM
+        observation = torch.tensor([observation], dtype=torch.float).to(
+            self.device)  # Shape: (1, sequence_length, feature_size)
+
+        # Prepare static input, ensure it's a tensor and add batch dimension
+        static_input = torch.tensor([static_input], dtype=torch.float).to(
+            self.device)  # Shape: (1, static_feature_size)
+
         with torch.no_grad():
-            probs = self.actor(state)
+            # Pass both the sequence of observations and static input to the actor network
+            probs = self.actor(observation, static_input)
+
+        # Move the probabilities back to CPU and convert to numpy for external processing
         return probs.cpu().numpy()
 
-    def choose_best_action(self, observation):
+    def choose_best_action(self, observation, static_input):
         """
         Selects the best action based on the current policy without exploration.
         """
-        if not isinstance(observation, np.ndarray):
-            observation = np.array(observation)
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        # Ensure observation is in the correct shape and type
+        observation = torch.tensor(observation, dtype=torch.float).unsqueeze(0).to(self.device)  # Add batch dimension
+        static_input = torch.tensor([static_input], dtype=torch.float).to(
+            self.device)  # Ensure static input is tensor and on the correct device
 
         with torch.no_grad():
-            probs = self.actor(state)
+            probs = self.actor(observation, static_input)  # Pass both dynamic and static inputs
+        best_action = torch.argmax(probs, dim=-1).item()  # Get the action with the highest probability
 
-        best_action = torch.argmax(probs, dim=1).item()
         return best_action
 
 
@@ -437,13 +487,12 @@ class Trading_Environment_Basic(gym.Env):
         self.done = False
         return self._next_observation()
 
-
     def _next_observation(self):
         start = max(self.current_step - self.look_back, 0)
         end = self.current_step
 
-        # Apply scaling based on 'edit' property of each variable
-        scaled_observation = []
+        # Collect a sequence of observations
+        observation_sequence = []
         for variable in self.variables:
             data = self.df[variable['variable']].iloc[start:end].values
             if variable['edit'] == 'standardize':
@@ -452,12 +501,18 @@ class Trading_Environment_Basic(gym.Env):
                 scaled_data = normalize_data(data)
             else:  # Default none
                 scaled_data = data
+            observation_sequence.append(scaled_data)
 
-            scaled_observation.extend(scaled_data)
+        # Stack along the new axis to create a sequence
+        observation_sequence = np.stack(observation_sequence, axis=1)
 
-        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
+        # Add additional features if required (e.g., current position)
+        additional_features = np.full((observation_sequence.shape[0], 1), (self.current_position + 1) / 2)
 
-        return np.array(scaled_observation)
+        # Combine the observation sequence with the additional features
+        combined_observation = np.hstack((observation_sequence, additional_features))
+
+        return combined_observation
 
     def step(self, action):
         # Existing action mapping
@@ -541,22 +596,21 @@ tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 20
-# Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-provision = 0.0001  # 0.001, cant be too high as it would not learn to tradede
+provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 512
 epochs = 1  # 40
-mini_batch_size = 64
+mini_batch_size = 128
 leverage = 1
-weight_decay = 0.00005
+weight_decay = 0.00001
 l1_lambda = 1e-7
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.001,  # learning rate for actor network
+                  alpha=0.005,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                   policy_clip=0.25,  # clip parameter for PPO
                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -585,39 +639,47 @@ for episode in tqdm(range(num_episodes)):
     window_df = next(dataset_iterator)
     dataset_index = episode % len(rolling_datasets)
 
-    print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
-    # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    print(
+        f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
 
-    observation = env.reset()
+    # Create a new environment with the selected window's data
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
+                                    tradable_markets=tradable_markets, provision=provision,
+                                    initial_balance=starting_balance, leverage=leverage)
+
+    observation, static_input = env.reset()  # Ensure reset returns both observation and static input if required
     done = False
     cumulative_reward = 0
     start_time = time.time()
-    initial_balance = env.balance
 
     while not done:
-        action, prob, val = agent.choose_action(observation)
+        action, prob, val = agent.choose_action(observation,
+                                                static_input)  # Pass both dynamic observation and static input
         observation_, reward, done, info = env.step(action)
-        agent.store_transition(observation, action, prob, val, reward, done)
-        observation = observation_
+
+        # Store transition with static input if required
+        agent.store_transition(observation, action, prob, val, reward, done,
+                               static_input)  # Add static input to stored memory if needed
+
+        observation = observation_  # Update observation for the next step
         cumulative_reward += reward
 
-        # Check if enough data is collected or if the dataset ends
-        if len(agent.memory.states) >= agent.memory.batch_size:  # or done:
+        # Check if enough data is collected or if the episode ends
+        if len(agent.memory.states) >= agent.memory.batch_size:
             agent.learn()
             agent.memory.clear_memory()
 
-    # Backtesting in parallel
+    # Parallel backtesting for validation and testing datasets
     with ThreadPoolExecutor(max_workers=2) as executor:
         validation_future = executor.submit(backtest_wrapper, df_validation, agent, 'EURUSD', look_back, variables,
                                             provision, starting_balance, leverage)
         test_future = executor.submit(backtest_wrapper, df_test, agent, 'EURUSD', look_back, variables, provision,
                                       starting_balance, leverage)
 
-        # Retrieve results
         validation_balance, validation_total_rewards, validation_number_of_trades = validation_future.result()
         test_balance, test_total_rewards, test_number_of_trades = test_future.result()
 
+    # Update backtest results
     backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
     backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
     backtest_results.loc[(episode, 'validation'), 'Final Reward'] = validation_total_rewards
@@ -627,11 +689,15 @@ for episode in tqdm(range(num_episodes)):
     backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
     backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
 
-    # calculate probabilities
+    # Calculate action probabilities for training, validation, and testing datasets
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_train = executor.submit(BF.calculate_probabilities_wrapper, df_train, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
-        future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
-        future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_train = executor.submit(BF.calculate_probabilities_wrapper, df_train, Trading_Environment_Basic, agent,
+                                       look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation,
+                                            Trading_Environment_Basic, agent, look_back, variables, tradable_markets,
+                                            provision, starting_balance, leverage)
+        future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,
+                                      look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
         train_probs = future_train.result()
         validation_probs = future_validation.result()
@@ -641,14 +707,14 @@ for episode in tqdm(range(num_episodes)):
     episode_probabilities['validation'].append(validation_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
     episode_probabilities['test'].append(test_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
 
-    # results
     end_time = time.time()
     episode_time = end_time - start_time
     total_rewards.append(cumulative_reward)
     episode_durations.append(episode_time)
     total_balances.append(env.balance)
 
-    print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+    print(
+        f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
     print("-----------------------------------")
 
 
