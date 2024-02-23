@@ -1,5 +1,5 @@
 """
-PPO 2.1
+PPO 2.2
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -542,7 +542,7 @@ window_size = '1Y'
 starting_balance = 10000
 look_back = 20
 # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-provision = 0.0001  # 0.001, cant be too high as it would not learn to tradede
+provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
 batch_size = 512

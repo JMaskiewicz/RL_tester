@@ -125,7 +125,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * 100  # Scale reward for better learning
+            total_reward += reward * 500  # Scale reward for better learning
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -142,7 +142,7 @@ random.seed(0)
 
 
 class DuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=0.125):
+    def __init__(self, input_dims, n_actions, dropout_rate=1/8):
         super(DuelingQNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 2048)
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -169,6 +169,7 @@ class DuelingQNetwork(nn.Module):
         q_values = val + (adv - adv.mean(dim=1, keepdim=True))
 
         return q_values
+
 class ReplayBuffer:
     def __init__(self, max_size, input_shape, n_actions):
         self.mem_size = max_size
@@ -458,7 +459,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 100 * reward
+        final_reward = 500 * reward
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -494,17 +495,18 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 12
-provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+look_back = 20
+# Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 1024
+batch_size = 512
 epochs = 1  # 40
-mini_batch_size = 128
+mini_batch_size = 64
 leverage = 1
-weight_decay = 0.0005
-l1_lambda = 0.00005
-num_episodes = 100  # 100
+weight_decay = 0.00005
+l1_lambda = 0.000005
+num_episodes = 1000  # 100
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
@@ -513,10 +515,10 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    mini_batch_size=mini_batch_size,
                    policy_alpha=0.001,
                    target_alpha=0.0005,
-                   gamma=0.95,
+                   gamma=0.9,
                    epsilon=1.0,
-                   epsilon_dec=0.9,
-                   epsilon_end=0.01,
+                   epsilon_dec=0.99,
+                   epsilon_end=0,
                    mem_size=100000,
                    batch_size=batch_size,
                    replace=5,  # num_episodes // 4
