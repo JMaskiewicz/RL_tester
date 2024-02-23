@@ -279,7 +279,7 @@ class PPO_Agent:
                 values = torch.tensor(vals_arr, dtype=torch.float).to(self.device)
 
             # Compute advantages and discounted rewards using the new vectorized method
-            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.numpy(), dones_arr)
+            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, values.cpu().numpy(), dones_arr)
             advantages = torch.tensor(advantages, dtype=torch.float).to(self.device)
             discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float).to(self.device)
 
