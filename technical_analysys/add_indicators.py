@@ -1,5 +1,6 @@
 import numpy as np
 from tqdm import tqdm
+import pandas as pd
 
 from technical_analysys.indicators import rsi, simple_moving_average, average_true_range, macd, stochastic_oscillator, parabolic_sar
 from technical_analysys.volatility_functions import close_to_close_volatility, parkinson_volatility, garman_klass_volatility, rogers_satchell_volatility
@@ -82,3 +83,64 @@ def compute_volatility(df, currency, method_func='close_to_close_volatility', n=
         raise ValueError(f"Unknown method function string '{method_func}'")
 
     return method_func_dict[method_func](df, currency, n)
+
+
+def add_time_sine_cosine(df, timestamp):
+    # Convert the index to datetime if it's not already
+    df.index = pd.to_datetime(df.index)
+
+    # Determine the number of seconds in one 'timestamp' period
+    if timestamp.endswith('H'):  # Hour
+        period_seconds = 3600
+    elif timestamp.endswith('D'):  # Day
+        period_seconds = 86400
+    elif timestamp.endswith('W'):  # Week
+        period_seconds = 604800
+    elif timestamp.endswith('M'):  # Month
+        period_seconds = 2628000  # Approximate
+    elif timestamp.endswith('Q'):  # Quarter
+        period_seconds = 7884000  # Approximate
+    elif timestamp.endswith('Y'):  # Year
+        period_seconds = 31536000
+    else:
+        raise ValueError("Unsupported timestamp format")
+
+    # Function to convert time to radians based on the timestamp
+    def time_to_radians(timestamp, dt, period_seconds):
+        if timestamp.endswith('H'):
+            # For hourly cycles, use the minutes and seconds
+            total_seconds = (dt.minute * 60) + dt.second
+        elif timestamp.endswith('D'):
+            # For daily cycles, use the full time of day
+            total_seconds = (dt.hour * 3600) + (dt.minute * 60) + dt.second
+        elif timestamp.endswith('W'):
+            # For weekly cycles, include the day of the week
+            day_of_week = dt.weekday()  # Monday is 0, Sunday is 6
+            total_seconds = (day_of_week * 86400) + (dt.hour * 3600) + (dt.minute * 60) + dt.second
+        elif timestamp.endswith('M'):
+            # For monthly cycles, include the day of the month
+            day_of_month = dt.day - 1  # First of the month is 0
+            total_seconds = (day_of_month * 86400) + (dt.hour * 3600) + (dt.minute * 60) + dt.second
+        elif timestamp.endswith('Q'):
+            # For quarterly cycles, include the day of the quarter
+            # Assuming quarters start in January, April, July, October
+            month_of_quarter = (dt.month - 1) % 3
+            day_of_quarter = (month_of_quarter * 30) + (dt.day - 1)  # Approximation
+            total_seconds = (day_of_quarter * 86400) + (dt.hour * 3600) + (dt.minute * 60) + dt.second
+        elif timestamp.endswith('Y'):
+            # For yearly cycles, include the day of the year
+            day_of_year = dt.timetuple().tm_yday - 1  # January 1 is 0
+            total_seconds = (day_of_year * 86400) + (dt.hour * 3600) + (dt.minute * 60) + dt.second
+        else:
+            raise ValueError("Unsupported timestamp format")
+
+        return 2 * np.pi * (total_seconds % period_seconds) / period_seconds
+
+    # Apply the function to each timestamp in the index
+    radians = df.index.map(lambda dt: time_to_radians(timestamp, dt, period_seconds))
+
+    # Calculate sine and cosine
+    df[f'sin_time_{timestamp}'] = np.sin(radians)
+    df[f'cos_time_{timestamp}'] = np.cos(radians)
+
+    return df

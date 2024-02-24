@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
-from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
+from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from data.edit import normalize_data, standardize_data
 import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
@@ -456,8 +456,14 @@ indicators = [
     {"indicator": "Stochastic", "mkf": "EURUSD"},]
 
 add_indicators(df, indicators)
-
+add_time_sine_cosine(df, '1W')
+add_time_sine_cosine(df, '1M')
+df[("sin_time_1W", "")] = df[("sin_time_1W", "")]/2 + 0.5
+df[("cos_time_1W", "")] = df[("cos_time_1W", "")]/2 + 0.5
+df[("sin_time_1M", "")] = df[("sin_time_1M", "")]/2 + 0.5
+df[("cos_time_1M", "")] = df[("cos_time_1M", "")]/2 + 0.5
 df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
+
 df = df.dropna()
 start_date = '2008-01-01'
 validation_date = '2021-01-01'
@@ -470,23 +476,27 @@ variables = [
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
     {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+    {"variable": ("sin_time_1W", ""), "edit": None},
+    {"variable": ("cos_time_1W", ""), "edit": None},
+    {"variable": ("sin_time_1M", ""), "edit": None},
+    {"variable": ("cos_time_1M", ""), "edit": None},
 ]
+
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
 look_back = 20
 # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 512
+batch_size = 4096
 epochs = 1  # 40
-mini_batch_size = 64
+mini_batch_size = 256
 leverage = 1
 weight_decay = 0.00005
 l1_lambda = 1e-7
-reward_scaling = 100
+reward_scaling = 1000
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
 agent = PPO_Agent(n_actions=env.action_space.n,

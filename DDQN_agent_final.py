@@ -26,7 +26,7 @@ import torch.nn.functional as F
 
 from data.function.load_data import load_data
 from data.function.rolling_window import rolling_window_datasets
-from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns
+from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from data.edit import normalize_data, standardize_data
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
@@ -383,6 +383,14 @@ indicators = [
     {"indicator": "Stochastic", "mkf": "EURUSD"},]
 
 add_indicators(df, indicators)
+add_time_sine_cosine(df, '1W')
+add_time_sine_cosine(df, '1M')
+df[("sin_time_1W", "")] = df[("sin_time_1W", "")]/2 + 0.5
+df[("cos_time_1W", "")] = df[("cos_time_1W", "")]/2 + 0.5
+df[("sin_time_1M", "")] = df[("sin_time_1M", "")]/2 + 0.5
+df[("cos_time_1M", "")] = df[("cos_time_1M", "")]/2 + 0.5
+df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
+
 df = df.dropna()
 start_date = '2008-01-01'
 validation_date = '2021-01-01'
@@ -395,8 +403,12 @@ variables = [
     {"variable": ("Close", "EURUSD"), "edit": "normalize"},
     {"variable": ("Close", "EURJPY"), "edit": "normalize"},
     {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
-    {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+    {"variable": ("sin_time_1W", ""), "edit": None},
+    {"variable": ("cos_time_1W", ""), "edit": None},
+    {"variable": ("sin_time_1M", ""), "edit": None},
+    {"variable": ("cos_time_1M", ""), "edit": None},
 ]
+
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000

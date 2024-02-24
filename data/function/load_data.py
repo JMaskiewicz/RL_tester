@@ -8,6 +8,12 @@ import pandas as pd
 import os
 from tqdm import tqdm
 import rarfile
+import warnings
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Suppress specific warnings from openpyxl
+warnings.filterwarnings("ignore", message="Workbook contains no default style, apply openpyxl's default")
 
 data_folder = "./data"
 
@@ -74,7 +80,6 @@ def unpack_all_rars_in_folder():
             except Exception as e:
                 print(f"Error extracting {filename}: {e}")
 
-data_folder = "./data"
 
 def load_data_long_format(currencies, timestamp_x):
     agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
@@ -103,3 +108,97 @@ def load_data_long_format(currencies, timestamp_x):
     df_all = pd.concat(dfs, axis=0)
 
     return df_all
+
+
+def load_data_2(tickers, timestamp_x):
+    agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+    dfs_all = []
+    for ticker in tqdm(tickers):
+        dfs = []
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        ticker_folder = os.path.join(project_root, 'data_sets', ticker)
+
+        # Check if ticker folder exists
+        if not os.path.exists(ticker_folder):
+            print(f"Folder for ticker {ticker} does not exist. Skipping...")
+            continue
+
+        # Iterate through each file in the ticker-specific folder
+        for file in tqdm(os.listdir(ticker_folder)):
+            if file.endswith('.xlsx'):
+                file_path = os.path.join(ticker_folder, file)
+
+                # Read the .xlsx file without headers and assign column names
+                df = pd.read_excel(file_path, header=None, names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                dfs.append(df)
+
+        df_all = pd.concat(dfs)
+        df_all['Date'] = pd.to_datetime(df_all['Date'], format='%Y-%m-%d %H:%M')
+        df_all = df_all.set_index('Date')
+        df_all = df_all[['Open', 'High', 'Low', 'Close']]
+        df_all = df_all.resample(timestamp_x).agg(agg_dict).dropna()
+        df_all['Currency'] = ticker
+        df_all.reset_index(inplace=True)
+        df_all.set_index(['Date', 'Currency'], inplace=True)
+        df_all = df_all.unstack('Currency')
+        dfs_all.append(df_all)
+
+    return pd.concat(dfs_all, axis=1)
+def process_ticker(ticker, timestamp_x, agg_dict, project_root):
+    dfs = []
+    ticker_folder = os.path.join(project_root, 'data_sets', ticker)
+
+    if not os.path.exists(ticker_folder):
+        print(f"Folder for ticker {ticker} does not exist. Skipping...")
+        return None
+
+    for file in os.listdir(ticker_folder):
+        if file.endswith('.xlsx'):
+            file_path = os.path.join(ticker_folder, file)
+            df = pd.read_excel(file_path, header=None, names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            dfs.append(df)
+
+    if not dfs:
+        return None
+
+    df_all = pd.concat(dfs)
+    df_all['Date'] = pd.to_datetime(df_all['Date'], format='%Y-%m-%d %H:%M')
+    df_all = df_all.set_index('Date')[['Open', 'High', 'Low', 'Close']]
+    df_all = df_all.resample(timestamp_x).agg(agg_dict).dropna()
+    df_all['Currency'] = ticker
+    df_all.reset_index(inplace=True)
+    df_all.set_index(['Date', 'Currency'], inplace=True)
+    return df_all.unstack('Currency')
+
+def load_data_3(tickers, timestamp_x):
+    agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+    dfs_all = []
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
+
+        for future in as_completed(futures):
+            df = future.result()
+            if df is not None:
+                dfs_all.append(df)
+
+    if dfs_all:
+        return pd.concat(dfs_all, axis=1)
+    else:
+        return pd.DataFrame()
+
+if __name__ == '__main__':
+    # TODO make it faster
+    start_time = time.time()
+    df = load_data_2(['WTIUSD', 'BCOUSD', 'EURUSD', 'XAUUSD'], '1H')
+    end_time = time.time()
+    episode_time = end_time - start_time
+    print(f"Data loaded in {episode_time} seconds")
+    start_time = time.time()
+    df_2 = load_data_3(['WTIUSD', 'BCOUSD', 'EURUSD', 'XAUUSD'], '1H')
+    end_time = time.time()
+    episode_time = end_time - start_time
+    print(f"Data loaded in {episode_time} seconds")
