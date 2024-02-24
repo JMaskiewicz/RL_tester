@@ -487,14 +487,14 @@ window_size = '1Y'
 starting_balance = 10000
 look_back = 20
 # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.01  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 4096
-epochs = 1  # 40
-mini_batch_size = 256
+batch_size = 1024
+epochs = 10  # 40
+mini_batch_size = 128
 leverage = 1
-weight_decay = 0.00005
+weight_decay = 0.00001
 l1_lambda = 1e-7
 reward_scaling = 1000
 # Create the environment
@@ -512,7 +512,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 10  # 100
+num_episodes = 50  # 100
 
 total_rewards = []
 episode_durations = []
@@ -533,7 +533,7 @@ for episode in tqdm(range(num_episodes)):
 
     print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
     # Create a new environment with the randomly selected window's data
-    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+    env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
 
     observation = env.reset()
     done = False
@@ -573,9 +573,9 @@ for episode in tqdm(range(num_episodes)):
 
     # calculate probabilities
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_train = executor.submit(BF.calculate_probabilities_wrapper, df_train, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
-        future_validation = executor.submit(BF.calculate_probabilities_wrapper, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
-        future_test = executor.submit(BF.calculate_probabilities_wrapper, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_train = executor.submit(BF.calculate_probabilities_wrapper_AC, df_train, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
+        future_validation = executor.submit(BF.calculate_probabilities_wrapper_AC, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance,leverage)
+        future_test = executor.submit(BF.calculate_probabilities_wrapper_AC, df_test, Trading_Environment_Basic, agent,look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
         train_probs = future_train.result()
         validation_probs = future_validation.result()
@@ -610,7 +610,7 @@ with ThreadPoolExecutor() as executor:
     futures = []
     datasets = [df_train, df_validation, df_test]
     for df in datasets:
-        futures.append(executor.submit(BF.process_dataset, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
+        futures.append(executor.submit(BF.process_dataset_AC, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
 
     results = [future.result() for future in futures]
 

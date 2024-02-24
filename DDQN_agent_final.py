@@ -412,18 +412,18 @@ variables = [
 tradable_markets = 'EURUSD'
 window_size = '1Y'
 starting_balance = 10000
-look_back = 24
+look_back = 20
 # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+provision = 0.01  # 0.001, cant be too high as it would not learn to trade
 
 # Training parameters
-batch_size = 4096
-epochs = 1  # 40
-mini_batch_size = 256
+batch_size = 1024
+epochs = 10  # 40
+mini_batch_size = 128
 leverage = 1
 weight_decay = 0.00005
 l1_lambda = 0.000005
-num_episodes = 20  # 100
+num_episodes = 1500  # 100
 reward_scaling = 1000
 # Create the environment
 env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
@@ -435,7 +435,7 @@ agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
                    target_alpha=0.0005,
                    gamma=0.9,
                    epsilon=1.0,
-                   epsilon_dec=0.9,
+                   epsilon_dec=0.99,
                    epsilon_end=0,
                    mem_size=100000,
                    batch_size=batch_size,

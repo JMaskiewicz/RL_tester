@@ -6,7 +6,7 @@ import math
 BF - backtest functions
 """
 
-def make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+def make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
     #TODO add description
     """
@@ -25,8 +25,25 @@ def make_predictions(df, environment_class, agent, look_back, variables, tradabl
     df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
     return df_with_predictions
 
+def make_predictions_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    #TODO add description
+    """
+    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
-def calculate_probabilities(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    agent.q_policy.eval()
+    with torch.no_grad():
+        for observation_idx in range(len(df) - env.look_back):
+            observation = env.reset(observation_idx)
+            action = agent.choose_best_action(observation)
+            predictions_df.iloc[observation_idx + env.look_back] = action
+
+    df_with_predictions = df.copy()
+    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+    return df_with_predictions
+
+def calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
     #TODO add description
     """
@@ -46,23 +63,6 @@ def calculate_probabilities(df, environment_class, agent, look_back, variables, 
     df_with_probabilities = pd.concat([df_with_probabilities, probabilities_df], axis=1)
     return df_with_probabilities
 
-
-def process_dataset(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
-    """
-    #TODO add description
-    """
-    predictions = make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-    probabilities = calculate_probabilities(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-    return predictions, probabilities
-
-def process_dataset_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
-    """
-    #TODO add description
-    """
-    predictions = make_predictions(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-    probabilities = calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-    return predictions, probabilities
-
 def calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     action_probabilities = []
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -78,8 +78,25 @@ def calculate_probabilities_DQN(df, environment_class, agent, look_back, variabl
     probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
     return probabilities_df
 
-def calculate_probabilities_wrapper(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
-    return calculate_probabilities(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+def process_dataset_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    #TODO add description
+    """
+    predictions = make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    probabilities = calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    return predictions, probabilities
+
+def process_dataset_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    #TODO add description
+    """
+    predictions = make_predictions_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    probabilities = calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    return predictions, probabilities
+
+
+def calculate_probabilities_wrapper_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    return calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
 def calculate_probabilities_wrapper_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     return calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
