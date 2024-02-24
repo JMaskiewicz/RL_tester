@@ -1,5 +1,5 @@
 """
-PPO 2.1
+PPO LSTM
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -31,7 +31,7 @@ from data.edit import normalize_data, standardize_data
 import backtest.backtest_functions.functions as BF
 
 # TODO add proper backtest function
-def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1):
+def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1):
     agent.actor.eval()
     agent.critic.eval()
 
@@ -93,7 +93,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += 100 * reward  # Scale reward for better learning
+            total_reward += reward_scaling * reward  # Scale reward for better learning
 
     # Ensure the agent's networks are back in training mode after evaluation
     agent.actor.train()
@@ -431,9 +431,15 @@ class PPO_Agent:
         best_action = np.argmax(action_probs)
         return best_action
 
+    def get_name(self):
+        """
+        Returns the class name of the instance.
+        """
+        return self.__class__.__name__
+
 
 class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1):
+    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1):
         super(Trading_Environment_Basic, self).__init__()
         self.df = df.reset_index(drop=True)
         self.look_back = look_back
@@ -443,6 +449,7 @@ class Trading_Environment_Basic(gym.Env):
         self.tradable_markets = tradable_markets
         self.provision = provision
         self.leverage = leverage
+        self.reward_scaling = reward_scaling
 
         # Define action space: 0 (sell), 1 (hold), 2 (buy)
         self.action_space = spaces.Discrete(3)
@@ -525,7 +532,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 100 * reward  # Scale reward for better learning
+        final_reward = reward * self.reward_scaling  # Scale reward for better learning
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:

@@ -93,7 +93,7 @@ def generate_predictions_and_backtest(df, agent, mkf, look_back, variables, prov
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += 100 * reward  # Scale reward for better learning
+            total_reward += 1000 * reward  # Scale reward for better learning
 
     # Ensure the agent's networks are back in training mode after evaluation
     agent.actor.train()
@@ -525,7 +525,7 @@ class Trading_Environment_Basic(gym.Env):
         without this the agent would not learn as the reward is too close to 0
         """
 
-        final_reward = 100 * reward  # Scale reward for better learning
+        final_reward = 1000 * reward  # Scale reward for better learning
 
         # Check if the episode is done
         if self.current_step >= len(self.df) - 1:
@@ -583,7 +583,7 @@ env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variabl
 agent = PPO_Agent(n_actions=env.action_space.n,
                   input_dims=env.calculate_input_dims(),
                   gamma=0.9,
-                  alpha=0.0005,  # learning rate for actor network
+                  alpha=0.01,  # learning rate for actor network
                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                   policy_clip=0.25,  # clip parameter for PPO
                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -593,7 +593,7 @@ agent = PPO_Agent(n_actions=env.action_space.n,
                   weight_decay=weight_decay,
                   l1_lambda=l1_lambda)
 
-num_episodes = 10  # 100
+num_episodes = 50  # 100
 
 total_rewards = []
 episode_durations = []
