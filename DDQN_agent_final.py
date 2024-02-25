@@ -344,9 +344,7 @@ class Trading_Environment_Basic(gym.Env):
 
         # Calculate cost based on action and current position
         if mapped_action != self.current_position:
-            if abs(mapped_action - self.current_position) == 2:
-                provision = math.log(1 - 2 * self.provision)
-            else:
+            if abs(mapped_action) == 1:
                 provision = math.log(1 - self.provision)
         else:
             provision = 0

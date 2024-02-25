@@ -147,11 +147,8 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
 
             # Calculate cost based on action and current position
             if action != current_position:
-                if abs(action - current_position) == 2:
-                    provision_cost = math.log(1 - 2 * provision)
-                    number_of_trades += 2
-                else:
-                    provision_cost = math.log(1 - provision) if action != 0 else 0
+                if abs(action) == 1:
+                    provision_cost = math.log(1 - provision)
                     number_of_trades += 1
             else:
                 provision_cost = 0
@@ -183,7 +180,6 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
     with torch.no_grad():  # Disable gradient computation for inference
         df_with_predictions = make_predictions_AC(df, Trading_Environment_Basic, agent, look_back, variables, mkf, provision, initial_balance, leverage)
-
         # Backtesting
         balance = initial_balance
         current_position = 0  # Neutral position
@@ -209,11 +205,8 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
             # Calculate cost based on action and current position
             if action != current_position:
-                if abs(action - current_position) == 2:
-                    provision_cost = math.log(1 - 2 * provision)
-                    number_of_trades += 2
-                else:
-                    provision_cost = math.log(1 - provision) if action != 0 else 0
+                if abs(action) == 1:
+                    provision_cost = math.log(1 - provision)
                     number_of_trades += 1
             else:
                 provision_cost = 0
