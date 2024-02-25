@@ -26,8 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
+from data.function.edit import normalize_data, standardize_data
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
-from data.edit import normalize_data, standardize_data
 import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
 
