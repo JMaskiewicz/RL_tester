@@ -120,19 +120,7 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
     agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=mkf, provision=provision, initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
-
-        # Generate Predictions
-        predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - env.look_back):
-            observation = env.reset()
-            action = agent.choose_best_action(observation)  # choose_best_action
-            action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + env.look_back] = action
-
-        # Merge with original DataFrame
-        df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
+        df_with_predictions = make_predictions_DQN(df, Trading_Environment_Basic, agent, look_back, variables, mkf, provision, initial_balance, leverage)
 
         # Backtesting
         balance = initial_balance
@@ -194,19 +182,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     agent.critic.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=mkf, provision=provision, initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
-
-        # Generate Predictions
-        predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - env.look_back):
-            observation = env.reset()
-            action = agent.choose_best_action(observation)  # choose_best_action
-            action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + env.look_back] = action
-
-        # Merge with original DataFrame
-        df_with_predictions = df.copy()
-        df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action']
+        df_with_predictions = make_predictions_AC(df, Trading_Environment_Basic, agent, look_back, variables, mkf, provision, initial_balance, leverage)
 
         # Backtesting
         balance = initial_balance
