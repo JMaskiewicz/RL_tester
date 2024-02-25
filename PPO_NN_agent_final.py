@@ -468,8 +468,8 @@ if __name__ == '__main__':
 
     df = df.dropna()
     start_date = '2008-01-01'
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    validation_date = '2022-01-01'
+    test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
     df_test = df[test_date:]
@@ -488,7 +488,7 @@ if __name__ == '__main__':
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.01  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     batch_size = 1024
@@ -498,6 +498,7 @@ if __name__ == '__main__':
     weight_decay = 0.00001
     l1_lambda = 1e-7
     reward_scaling = 1000
+    num_episodes = 1000  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = PPO_Agent(n_actions=env.action_space.n,
@@ -513,7 +514,6 @@ if __name__ == '__main__':
                       weight_decay=weight_decay,
                       l1_lambda=l1_lambda)
 
-    num_episodes = 1000  # 100
 
     total_rewards = []
     episode_durations = []

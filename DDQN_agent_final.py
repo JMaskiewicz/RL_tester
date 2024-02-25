@@ -394,8 +394,8 @@ if __name__ == '__main__':
 
     df = df.dropna()
     start_date = '2008-01-01'
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    validation_date = '2022-01-01'
+    test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
     df_test = df[test_date:]
@@ -416,16 +416,16 @@ if __name__ == '__main__':
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     batch_size = 1024
-    epochs = 10  # 40
+    epochs = 1  # 40
     mini_batch_size = 128
     leverage = 1
     weight_decay = 0.00005
     l1_lambda = 0.000005
-    num_episodes = 1500  # 100
+    num_episodes = 1000  # 100
     reward_scaling = 1000
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
@@ -433,8 +433,8 @@ if __name__ == '__main__':
                        n_actions=env.action_space.n,
                        epochs=epochs,
                        mini_batch_size=mini_batch_size,
-                       policy_alpha=0.001,
-                       target_alpha=0.0005,
+                       policy_alpha=0.0005,
+                       target_alpha=0.00005,
                        gamma=0.9,
                        epsilon=1.0,
                        epsilon_dec=0.99,
@@ -526,8 +526,8 @@ if __name__ == '__main__':
         print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
         print("-----------------------------------")
 
-    #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")
-    #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")
+    #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
+    #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
 
     print(backtest_results)
 

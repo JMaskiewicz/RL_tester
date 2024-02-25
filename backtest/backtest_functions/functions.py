@@ -120,17 +120,15 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
     agent.q_policy.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                                   tradable_markets=mkf, provision=provision,
-                                                   initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=mkf, provision=provision, initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
 
         # Generate Predictions
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - validation_env.look_back):
-            observation = validation_env.reset()
+        for validation_observation in range(len(df) - env.look_back):
+            observation = env.reset()
             action = agent.choose_best_action(observation)  # choose_best_action
             action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + validation_env.look_back] = action
+            predictions_df.iloc[validation_observation + env.look_back] = action
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
@@ -163,18 +161,23 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
             if action != current_position:
                 if abs(action - current_position) == 2:
                     provision_cost = math.log(1 - 2 * provision)
+                    number_of_trades += 2
                 else:
                     provision_cost = math.log(1 - provision) if action != 0 else 0
-                number_of_trades += 1
+                    number_of_trades += 1
             else:
                 provision_cost = 0
 
             reward += provision_cost
 
+            # Update the current position
+            current_position = action
+
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * reward_scaling  # Scale reward for better learning
+            # Scale reward for better learning
+            total_reward += reward * reward_scaling
 
     # Switch back to training mode
     agent.q_policy.train()
@@ -232,18 +235,23 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
             if action != current_position:
                 if abs(action - current_position) == 2:
                     provision_cost = math.log(1 - 2 * provision)
+                    number_of_trades += 2
                 else:
                     provision_cost = math.log(1 - provision) if action != 0 else 0
-                number_of_trades += 1
+                    number_of_trades += 1
             else:
                 provision_cost = 0
 
             reward += provision_cost
 
+            # Update the current position
+            current_position = action
+
             # Update the balance
             balance *= math.exp(reward)
 
-            total_reward += reward * reward_scaling  # Scale reward for better learning
+            # Scale reward for better learning
+            total_reward += reward * reward_scaling
 
     # Ensure the agent's networks are back in training mode after evaluation
     agent.actor.train()
