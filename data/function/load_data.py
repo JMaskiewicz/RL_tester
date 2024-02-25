@@ -1,5 +1,5 @@
-# description
 """
+# TODO add description
 
 """
 
@@ -185,8 +185,7 @@ def load_data_parallel(tickers, timestamp_x):
     dfs_all = []
     with ProcessPoolExecutor() as executor:
         # Submit all tasks to the executor
-        future_to_ticker = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for
-                            ticker in tickers}
+        future_to_ticker = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
 
         # Process as they complete
         for future in tqdm(as_completed(future_to_ticker), total=len(tickers), desc='Processing tickers'):

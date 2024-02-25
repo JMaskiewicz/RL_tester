@@ -1,14 +1,15 @@
+"""
+# TODO add description
+BF - Backtesting Framework
+"""
 import pandas as pd
 import numpy as np
 import torch
 import math
-"""
-BF - backtest functions
-"""
 
 def make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
-    #TODO add description
+    # TODO add description
     """
     predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -27,7 +28,7 @@ def make_predictions_AC(df, environment_class, agent, look_back, variables, trad
 
 def make_predictions_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
-    #TODO add description
+    # TODO add description
     """
     predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -45,7 +46,7 @@ def make_predictions_DQN(df, environment_class, agent, look_back, variables, tra
 
 def calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
-    #TODO add description
+    # TODO add description
     """
     action_probabilities = []
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
@@ -64,6 +65,9 @@ def calculate_probabilities_AC(df, environment_class, agent, look_back, variable
     return df_with_probabilities
 
 def calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    # TODO add description
+    """
     action_probabilities = []
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
@@ -80,7 +84,7 @@ def calculate_probabilities_DQN(df, environment_class, agent, look_back, variabl
 
 def process_dataset_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
-    #TODO add description
+    # TODO add description
     """
     predictions = make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
     probabilities = calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
@@ -88,7 +92,7 @@ def process_dataset_AC(df, environment_class, agent, look_back, variables, trada
 
 def process_dataset_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
-    #TODO add description
+    # TODO add description
     """
     predictions = make_predictions_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
     probabilities = calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
@@ -96,13 +100,22 @@ def process_dataset_DQN(df, environment_class, agent, look_back, variables, trad
 
 
 def calculate_probabilities_wrapper_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    # TODO add description
+    """
     return calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
 def calculate_probabilities_wrapper_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    # TODO add description
+    """
     return calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
 
-# TODO add proper backtest function
 def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    # TODO add proper backtest function
+    """
     # Switch to evaluation mode
     agent.q_policy.eval()
 
@@ -170,23 +183,23 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
 
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None):
     """
+    # TODO add description
+    # TODO add proper backtest function
     AC - Actor Critic
     """
     agent.actor.eval()
     agent.critic.eval()
 
     with torch.no_grad():  # Disable gradient computation for inference
-        validation_env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                                   tradable_markets=mkf, provision=provision,
-                                                   initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=mkf, provision=provision, initial_balance=initial_balance, leverage=leverage, reward_scaling=reward_scaling)
 
         # Generate Predictions
         predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
-        for validation_observation in range(len(df) - validation_env.look_back):
-            observation = validation_env.reset()
+        for validation_observation in range(len(df) - env.look_back):
+            observation = env.reset()
             action = agent.choose_best_action(observation)  # choose_best_action
             action += - 1  # Convert action to -1, 0, 1
-            predictions_df.iloc[validation_observation + validation_env.look_back] = action
+            predictions_df.iloc[validation_observation + env.look_back] = action
 
         # Merge with original DataFrame
         df_with_predictions = df.copy()
@@ -241,10 +254,14 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
 def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling, Trading_Environment_Basic=None):
     """
+    # TODO add description
     AC - Actor Critic
     """
     return generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling, Trading_Environment_Basic)
 
 
 def backtest_wrapper_DQN(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling, Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    """
     return generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling, Trading_Environment_Basic)
