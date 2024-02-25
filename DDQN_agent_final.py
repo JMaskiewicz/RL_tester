@@ -416,7 +416,7 @@ if __name__ == '__main__':
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     batch_size = 1024
