@@ -418,6 +418,8 @@ class Trading_Environment_Basic(gym.Env):
         if mapped_action != self.current_position:
             if abs(mapped_action) == 1:
                 provision = math.log(1 - self.provision)
+            else:
+                provision = 0
         else:
             provision = 0
 

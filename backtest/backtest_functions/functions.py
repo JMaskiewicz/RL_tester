@@ -150,6 +150,8 @@ def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, 
                 if abs(action) == 1:
                     provision_cost = math.log(1 - provision)
                     number_of_trades += 1
+                else:
+                    provision_cost = 0
             else:
                 provision_cost = 0
 
@@ -208,6 +210,8 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
                 if abs(action) == 1:
                     provision_cost = math.log(1 - provision)
                     number_of_trades += 1
+                else:
+                    provision_cost = 0
             else:
                 provision_cost = 0
 
