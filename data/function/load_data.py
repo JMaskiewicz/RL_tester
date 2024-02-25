@@ -10,7 +10,7 @@ from tqdm import tqdm
 import rarfile
 import warnings
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 
 # Suppress specific warnings from openpyxl
 warnings.filterwarnings("ignore", message="Workbook contains no default style, apply openpyxl's default")
@@ -130,7 +130,7 @@ def load_data_2(tickers, timestamp_x):
                 file_path = os.path.join(ticker_folder, file)
 
                 # Read the .xlsx file without headers and assign column names
-                df = pd.read_excel(file_path, header=None, names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                df = pd.read_excel(file_path, engine='openpyxl', header=None, names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                 dfs.append(df)
 
         df_all = pd.concat(dfs)
@@ -145,6 +145,8 @@ def load_data_2(tickers, timestamp_x):
         dfs_all.append(df_all)
 
     return pd.concat(dfs_all, axis=1)
+
+
 def process_ticker(ticker, timestamp_x, agg_dict, project_root):
     dfs = []
     ticker_folder = os.path.join(project_root, 'data_sets', ticker)
@@ -156,7 +158,8 @@ def process_ticker(ticker, timestamp_x, agg_dict, project_root):
     for file in os.listdir(ticker_folder):
         if file.endswith('.xlsx'):
             file_path = os.path.join(ticker_folder, file)
-            df = pd.read_excel(file_path, header=None, names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            df = pd.read_excel(file_path, engine='openpyxl', header=None,
+                               names=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
             dfs.append(df)
 
     if not dfs:
@@ -169,36 +172,49 @@ def process_ticker(ticker, timestamp_x, agg_dict, project_root):
     df_all['Currency'] = ticker
     df_all.reset_index(inplace=True)
     df_all.set_index(['Date', 'Currency'], inplace=True)
-    return df_all.unstack('Currency')
+    df_all = df_all.unstack('Currency')
+    return df_all
 
-def load_data_3(tickers, timestamp_x):
+
+def load_data_parallel(tickers, timestamp_x):
+    start_time = time.time()
     agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
-    dfs_all = []
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
 
-    with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
+    dfs_all = []
+    with ProcessPoolExecutor() as executor:
+        # Submit all tasks to the executor
+        future_to_ticker = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for
+                            ticker in tickers}
 
-        for future in as_completed(futures):
+        # Process as they complete
+        for future in tqdm(as_completed(future_to_ticker), total=len(tickers), desc='Processing tickers'):
             df = future.result()
             if df is not None:
                 dfs_all.append(df)
 
+    # Concatenate all DataFrames in the list
     if dfs_all:
-        return pd.concat(dfs_all, axis=1)
+        df = pd.concat(dfs_all, axis=1)
+        end_time = time.time()
+        episode_time = end_time - start_time
+        print(f"Data loaded in {episode_time} seconds")
+        return df
     else:
+        end_time = time.time()
+        episode_time = end_time - start_time
+        print(f"Data loaded in {episode_time} seconds")
         return pd.DataFrame()
 
 if __name__ == '__main__':
-    # TODO make it faster
-    start_time = time.time()
-    df = load_data_2(['WTIUSD', 'BCOUSD', 'EURUSD', 'XAUUSD'], '1H')
+    '''    start_time = time.time()
+    df = load_data_2(['WTIUSD', 'BCOUSD'], '1H')
     end_time = time.time()
     episode_time = end_time - start_time
-    print(f"Data loaded in {episode_time} seconds")
+    print(f"Data loaded in {episode_time} seconds")'''
     start_time = time.time()
-    df_2 = load_data_3(['WTIUSD', 'BCOUSD', 'EURUSD', 'XAUUSD'], '1H')
+    df_2 = load_data_parallel(['WTIUSD', 'BCOUSD'], '1H')
     end_time = time.time()
     episode_time = end_time - start_time
     print(f"Data loaded in {episode_time} seconds")
