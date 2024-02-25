@@ -160,7 +160,7 @@ class CriticNetwork(nn.Module):
 
 class PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma

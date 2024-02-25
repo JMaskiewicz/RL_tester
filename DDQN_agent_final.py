@@ -107,7 +107,7 @@ class ReplayBuffer:
 
 class DDQN_Agent:
     def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005 , epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # TODO repair cuda
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.epochs = epochs
