@@ -6,7 +6,8 @@ PPO 3.2
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- try TFT transformer (Temporal Fusion Transformers transformer time series)
+- try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
+- HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
 
 """
 import numpy as np
@@ -311,17 +312,15 @@ class PPO_Agent:
 
     def choose_best_action(self, observation):
         """
-        Selects the best action based on the current policy without exploration.
+        Selects the best action based on the current policy without exploration by using
+        the probabilities from get_action_probabilities function.
         """
-        if not isinstance(observation, np.ndarray):
-            observation = np.array(observation)
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        # Get action probabilities for the given observation
+        action_probs = self.get_action_probabilities(observation)
 
-        with torch.no_grad():
-            probs = self.actor(state)
+        # Use np.argmax to select the action with the highest probability
+        best_action = np.argmax(action_probs)
 
-        best_action = torch.argmax(probs, dim=1).item()
         return best_action
 
     def get_name(self):
@@ -482,8 +481,6 @@ if __name__ == '__main__':
         {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
         {"variable": ("sin_time_1W", ""), "edit": None},
         {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("sin_time_1M", ""), "edit": None},
-        {"variable": ("cos_time_1M", ""), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -495,7 +492,7 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 1024
-    epochs = 10  # 40
+    epochs = 1  # 40
     mini_batch_size = 128
     leverage = 1
     weight_decay = 0.00001

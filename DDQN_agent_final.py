@@ -6,7 +6,7 @@ DDQN 2.3
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- try TFT transformer (Temporal Fusion Transformers transformer time series)
+- try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
 
 """
 import numpy as np
