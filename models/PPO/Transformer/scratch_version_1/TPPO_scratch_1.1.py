@@ -6,7 +6,6 @@ Transformer based PPO agent for trading version 1.1
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
 - HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
 
 """
@@ -236,6 +235,9 @@ class Transformer_PPO_Agent:
         self.memory.clear_memory()
 
     def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns, batch_static_states):
+        if batch_states.dim() == 2:
+            batch_states = batch_states.unsqueeze(1)
+
         # Actor loss calculations
         new_probs = self.actor(batch_states, batch_static_states)
         dist = torch.distributions.Categorical(new_probs)
@@ -275,36 +277,39 @@ class Transformer_PPO_Agent:
 
         return advantages, discounted_rewards
 
-    def choose_action(self, dynamic_state, static_state):
-        """
-        Selects an action based on the current policy and exploration noise.
-        """
-        # Convert dynamic_state and static_state to PyTorch tensors if they are NumPy arrays
-        if isinstance(dynamic_state, np.ndarray):
-            dynamic_state = torch.tensor(dynamic_state, dtype=torch.float32, device=self.device)
-        if isinstance(static_state, np.ndarray):
-            static_state = torch.tensor(static_state, dtype=torch.float32, device=self.device)
+    def choose_action(self, observation, static_input):
+        # Ensure observation is a NumPy array
+        if not isinstance(observation, np.ndarray):
+            observation = np.array(observation)
 
-        # Ensure dynamic_state has 3 dimensions [batch_size, seq_length, input_dims]
-        # The following lines add the batch and sequence length dimensions if they are missing
-        if dynamic_state.dim() == 1:  # Only input_dims dimension present
-            dynamic_state = dynamic_state.unsqueeze(0).unsqueeze(0)  # Add batch and seq_length dimensions
-        elif dynamic_state.dim() == 2:  # Only seq_length and input_dims dimensions present
-            dynamic_state = dynamic_state.unsqueeze(0)  # Add batch dimension
+        # Reshape observation to [1, sequence length, feature dimension]
+        observation = observation.reshape(1, -1, observation.shape[-1])
 
-        # Ensure static_state has at least 2 dimensions [batch_size, input_dims]
-        if static_state.dim() == 1:
-            static_state = static_state.unsqueeze(0)  # Add batch dimension
+        # Convert observation and static_input to tensors and move them to the appropriate device
+        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
 
-        # Generate action probabilities using the actor network
-        probs = self.actor(dynamic_state, static_state)
+        # Ensure state has the correct 3D shape: [batch size, sequence length, feature dimension]
+        if state.dim() != 3:  # Add missing dimensions if necessary
+            state = state.view(1, -1, state.size(-1))
+
+        # Pass the state and static_input_tensor through the actor network to get the action probabilities
+        probs = self.actor(state, static_input_tensor)
+
+        # Create a categorical distribution over the list of probabilities of actions
         dist = torch.distributions.Categorical(probs)
 
-        # Sample an action and compute its log probability and value
+        # Sample an action from the distribution
         action = dist.sample()
-        log_prob = dist.log_prob(action)
-        value = self.critic(dynamic_state, static_state)
 
+        # Calculate the log probability of the action in the distribution
+        log_prob = dist.log_prob(action)
+
+        # Pass the state and static_input_tensor through the critic network to get the state value
+        value = self.critic(state, static_input_tensor)
+
+        # Return the sampled action, its log probability, and the state value
+        # Convert tensors to Python numbers using .item()
         return action.item(), log_prob.item(), value.item()
 
     def get_action_probabilities(self, dynamic_state, static_state):
@@ -364,49 +369,41 @@ class Trading_Environment_Basic(gym.Env):
         # Define action space: 0 (sell), 1 (hold), 2 (buy)
         self.action_space = spaces.Discrete(3)
 
-        # Define observation space for dynamic inputs
-        num_variables = len(self.variables) if variables is not None else 0
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(look_back * num_variables,), dtype=np.float32)
-
         self.reset()
 
     def calculate_input_dims(self):
-        num_variables = len(self.variables) if self.variables is not None else 0  # Number of variables
+        num_variables = len(self.variables)  # Number of variables
         input_dims = num_variables * self.look_back  # Variables times look_back
         return input_dims
 
-    def reset(self, observation_idx=None):
-        if observation_idx is not None:
-            self.current_step = observation_idx + self.look_back
+    def reset(self, observation=None):
+        if observation is not None:
+            self.current_step = observation + self.look_back
         else:
             self.current_step = self.look_back
 
         self.balance = self.initial_balance
-        self.current_position = 0  # Resetting static state
         self.done = False
-        return self._next_observation(), self._get_static_state()
+        return self._next_observation()
 
     def _next_observation(self):
         start = max(self.current_step - self.look_back, 0)
         end = self.current_step
 
+        # Apply scaling based on 'edit' property of each variable
         scaled_observation = []
         for variable in self.variables:
             data = self.df[variable['variable']].iloc[start:end].values
             if variable['edit'] == 'standardize':
-                scaled_data = (data - np.mean(data)) / np.std(data)  # Example standardization
+                scaled_data = standardize_data(data)
             elif variable['edit'] == 'normalize':
-                scaled_data = (data - np.min(data)) / (np.max(data) - np.min(data))  # Example normalization
+                scaled_data = normalize_data(data)
             else:
                 scaled_data = data
 
             scaled_observation.extend(scaled_data)
-
         return np.array(scaled_observation)
 
-    def _get_static_state(self):
-        # Static state contains the current position normalized to range [0, 1]
-        return np.array([(self.current_position + 1) / 2])
 
     def step(self, action): # TODO: Check if this is correct
         action_mapping = {0: -1, 1: 0, 2: 1}
@@ -436,11 +433,11 @@ class Trading_Environment_Basic(gym.Env):
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
         """
-        reward = reward * self.reward_scaling
+        final_reward = reward * self.reward_scaling
 
         self.done = self.current_step >= len(self.df) - 1
 
-        return self._next_observation(), self._get_static_state(), reward, self.done, {}
+        return self._next_observation(), final_reward, self.done, {}
 
 # Example usage
 # Stock market variables
@@ -534,18 +531,19 @@ if __name__ == '__main__':
         # Create a new environment with the randomly selected window's data
         env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
 
-        dynamic_state, static_state = env.reset()
+        observation = env.reset()
         done = False
         cumulative_reward = 0
         start_time = time.time()
         initial_balance = env.balance
 
         while not done:
-            action, log_prob, value = agent.choose_action(dynamic_state, static_state)
-            new_state, reward, done, info = env.step(action)  # Unpack the return values from env.step
-            dynamic_state_, static_state_ = new_state
-            agent.store_transition(dynamic_state, action, log_prob, value, reward, done, static_state)
-            dynamic_state, static_state = dynamic_state_, static_state_
+            current_position = env.current_position
+            action, prob, val = agent.choose_action(observation, current_position)
+            static_input = current_position
+            observation_, reward, done, info = env.step(action)
+            agent.store_transition(observation, action, prob, val, reward, done, static_input)
+            observation = observation_
             cumulative_reward += reward
 
             # Check if enough data is collected or if the dataset ends

@@ -360,15 +360,14 @@ class Trading_Environment_Basic(gym.Env):
         input_dims += 1  # Add one more dimension for current position
         return input_dims
 
-    def reset(self, observation_idx=None, reset_position=True):
+    def reset(self, observation_idx=None):
         if observation_idx is not None:
             self.current_step = observation_idx + self.look_back
         else:
             self.current_step = self.look_back
 
         self.balance = self.initial_balance
-        if reset_position:
-            self.current_position = 0
+        self.current_position = 0
         self.done = False
         return self._next_observation()
 
@@ -450,7 +449,7 @@ class Trading_Environment_Basic(gym.Env):
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '4H')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -460,15 +459,15 @@ if __name__ == '__main__':
 
     add_indicators(df, indicators)
     add_time_sine_cosine(df, '1W')
-    add_time_sine_cosine(df, '1M')
+    add_time_sine_cosine(df, '1D')
     df[("sin_time_1W", "")] = df[("sin_time_1W", "")]/2 + 0.5
     df[("cos_time_1W", "")] = df[("cos_time_1W", "")]/2 + 0.5
-    df[("sin_time_1M", "")] = df[("sin_time_1M", "")]/2 + 0.5
-    df[("cos_time_1M", "")] = df[("cos_time_1M", "")]/2 + 0.5
+    df[("sin_time_1D", "")] = df[("sin_time_1D", "")]/2 + 0.5
+    df[("cos_time_1D", "")] = df[("cos_time_1D", "")]/2 + 0.5
     df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
 
     df = df.dropna()
-    start_date = '2008-01-01'
+    start_date = '2015-01-01'
     validation_date = '2022-01-01'
     test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
@@ -482,24 +481,28 @@ if __name__ == '__main__':
         {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
         {"variable": ("sin_time_1W", ""), "edit": None},
         {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("sin_time_1D", ""), "edit": None},
+        {"variable": ("cos_time_1D", ""), "edit": None},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+        {"variable": ("MACD_Line", "EURUSD"), "edit": "normalize"},
     ]
 
     tradable_markets = 'EURUSD'
-    window_size = '1Y'
+    window_size = '6M'
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 1024
+    batch_size = 4096  # 2048
     epochs = 1  # 40
-    mini_batch_size = 128
+    mini_batch_size = 256
     leverage = 1
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    reward_scaling = 100
-    num_episodes = 2000  # 100
+    reward_scaling = 1000
+    num_episodes = 1000  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = PPO_Agent(n_actions=env.action_space.n,
@@ -507,14 +510,13 @@ if __name__ == '__main__':
                       gamma=0.9,
                       alpha=0.0005,  # learning rate for actor network
                       gae_lambda=0.8,  # lambda for generalized advantage estimation
-                      policy_clip=0.2,  # clip parameter for PPO
+                      policy_clip=0.25,  # clip parameter for PPO
                       entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
                       batch_size=batch_size,
                       n_epochs=epochs,
                       mini_batch_size=mini_batch_size,
                       weight_decay=weight_decay,
                       l1_lambda=l1_lambda)
-
 
     total_rewards = []
     episode_durations = []

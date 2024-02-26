@@ -18,7 +18,7 @@ def make_predictions_AC(df, environment_class, agent, look_back, variables, trad
     agent.critic.eval()
     with torch.no_grad():
         for observation_idx in range(len(df) - env.look_back):
-            observation = env.reset(observation_idx)
+            observation = env.reset(observation_idx, reset_position=False)
             action = agent.choose_best_action(observation)
             predictions_df.iloc[observation_idx + env.look_back] = action
 
@@ -36,7 +36,7 @@ def make_predictions_DQN(df, environment_class, agent, look_back, variables, tra
     agent.q_policy.eval()
     with torch.no_grad():
         for observation_idx in range(len(df) - env.look_back):
-            observation = env.reset(observation_idx)
+            observation = env.reset(observation_idx, reset_position=False)
             action = agent.choose_best_action(observation)
             predictions_df.iloc[observation_idx + env.look_back] = action
 
@@ -55,14 +55,12 @@ def calculate_probabilities_AC(df, environment_class, agent, look_back, variable
     agent.critic.eval()
     with torch.no_grad():
         for observation_idx in range(len(df) - env.look_back):
-            observation = env.reset(observation_idx)
+            observation = env.reset(observation_idx, reset_position=False)
             probs = agent.get_action_probabilities(observation)
             action_probabilities.append(probs[0])
 
     probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
-    df_with_probabilities = df.iloc[env.look_back:].reset_index(drop=True)
-    df_with_probabilities = pd.concat([df_with_probabilities, probabilities_df], axis=1)
-    return df_with_probabilities
+    return probabilities_df
 
 def calculate_probabilities_DQN(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
@@ -74,9 +72,8 @@ def calculate_probabilities_DQN(df, environment_class, agent, look_back, variabl
     agent.q_policy.eval()
     with torch.no_grad():
         for observation_idx in range(len(df) - env.look_back):
-            observation = env.reset(observation_idx)
+            observation = env.reset(observation_idx, reset_position=False)
             probs = agent.get_action_probabilities(observation)
-            assert probs.shape == (3,), f"Expected probs shape to be (3,), got {probs.shape}"
             action_probabilities.append(probs)
 
     probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])

@@ -289,14 +289,15 @@ class Trading_Environment_Basic(gym.Env):
         input_dims += 1  # Add one more dimension for current position
         return input_dims
 
-    def reset(self, observation_idx=None):
+    def reset(self, observation_idx=None, reset_position=True):
         if observation_idx is not None:
             self.current_step = observation_idx + self.look_back
         else:
             self.current_step = self.look_back
 
         self.balance = self.initial_balance
-        self.current_position = 0
+        if reset_position:
+            self.current_position = 0
         self.done = False
         return self._next_observation()
 
@@ -332,15 +333,7 @@ class Trading_Environment_Basic(gym.Env):
 
         # Calculate log return based on action
         log_return = math.log(next_price / current_price) if current_price != 0 else 0
-        reward = 0
-
-        if mapped_action == 1:  # Buying
-            reward = log_return
-        elif mapped_action == -1:  # Selling
-            reward = -log_return
-
-        # Apply leverage to the base reward
-        reward *= self.leverage
+        reward = log_return * mapped_action * self.leverage
 
         # Calculate cost based on action and current position
         if mapped_action != self.current_position:
@@ -367,8 +360,7 @@ class Trading_Environment_Basic(gym.Env):
         final_reward = reward * self.reward_scaling
 
         # Check if the episode is done
-        if self.current_step >= len(self.df) - 1:
-            self.done = True
+        self.done = self.current_step >= len(self.df) - 1
 
         return self._next_observation(), final_reward, self.done, {}
 
