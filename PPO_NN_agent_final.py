@@ -193,7 +193,7 @@ class PPO_Agent:
             # Generating the data for the entire batch
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, _ = self.memory.generate_batches()
 
-            # Convert arrays to tensors and move to the device here, instead of in PPOMemory
+            # Convert arrays to tensors
             state_arr = state_arr.clone().detach().to(self.device)
             action_arr = action_arr.clone().detach().to(self.device)
             old_prob_arr = old_prob_arr.clone().detach().to(self.device)
@@ -265,7 +265,6 @@ class PPO_Agent:
         advantages = torch.zeros_like(rewards)
         last_gae_lam = 0
 
-        # Convert 'dones' to a float tensor
         dones = dones.float()
 
         for t in reversed(range(n)):
@@ -405,12 +404,7 @@ class Trading_Environment_Basic(gym.Env):
 
         # Calculate log return based on action
         log_return = math.log(next_price / current_price) if current_price != 0 else 0
-        reward = 0
-
-        if mapped_action == 1:  # Buying
-            reward = log_return
-        elif mapped_action == -1:  # Selling
-            reward = -log_return
+        reward = log_return * mapped_action * self.leverage
 
         # Apply leverage to the base reward
         reward *= self.leverage
@@ -448,8 +442,6 @@ class Trading_Environment_Basic(gym.Env):
 # Example usage
 # Stock market variables
 if __name__ == '__main__':
-    # Example usage
-    # Stock market variables
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
@@ -514,7 +506,6 @@ if __name__ == '__main__':
                       mini_batch_size=mini_batch_size,
                       weight_decay=weight_decay,
                       l1_lambda=l1_lambda)
-
 
     total_rewards = []
     episode_durations = []
