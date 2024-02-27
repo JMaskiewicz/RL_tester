@@ -93,7 +93,11 @@ class ActorNetwork(nn.Module):
         self.bn2 = nn.BatchNorm1d(1024)
         self.fc3 = nn.Linear(1024, 512)
         self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, n_actions)
+        self.fc4 = nn.Linear(512, 256)
+        self.bn4 = nn.BatchNorm1d(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.bn5 = nn.BatchNorm1d(128)
+        self.fc6 = nn.Linear(128, n_actions)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
@@ -118,6 +122,18 @@ class ActorNetwork(nn.Module):
         x = self.dropout(x)
 
         x = self.fc4(x)
+        if x.size(0) > 1:
+            x = self.bn4(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc5(x)
+        if x.size(0) > 1:
+            x = self.bn5(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc6(x)
         x = self.softmax(x)
         return x
 
@@ -131,7 +147,11 @@ class CriticNetwork(nn.Module):
         self.bn2 = nn.BatchNorm1d(1024)
         self.fc3 = nn.Linear(1024, 512)
         self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 1)
+        self.fc4 = nn.Linear(512, 256)
+        self.bn4 = nn.BatchNorm1d(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.bn5 = nn.BatchNorm1d(128)
+        self.fc6 = nn.Linear(512, 1)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -154,7 +174,19 @@ class CriticNetwork(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
 
-        q = self.fc4(x)
+        x = self.fc4(x)
+        if x.size(0) > 1:
+            x = self.bn4(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        x = self.fc5(x)
+        if x.size(0) > 1:
+            x = self.bn5(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+
+        q = self.fc6(x)
         return q
 
 
