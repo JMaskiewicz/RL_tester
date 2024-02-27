@@ -1,5 +1,5 @@
 """
-PPO 3.2
+PPO 3.3
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -472,7 +472,8 @@ if __name__ == '__main__':
         {"variable": ("Close", "EURJPY"), "edit": "normalize"},
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
+        {"variable": ("sin_time_1W", ""), "edit": None},  # should be effecting neutral position?
         {"variable": ("cos_time_1W", ""), "edit": None},
     ]
 
@@ -487,11 +488,11 @@ if __name__ == '__main__':
     batch_size = 1024
     epochs = 1  # 40
     mini_batch_size = 128
-    leverage = 1
+    leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
     reward_scaling = 100
-    num_episodes = 2000  # 100
+    num_episodes = 1000  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = PPO_Agent(n_actions=env.action_space.n,
