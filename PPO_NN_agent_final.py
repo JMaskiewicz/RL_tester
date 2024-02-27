@@ -151,7 +151,7 @@ class CriticNetwork(nn.Module):
         self.bn4 = nn.BatchNorm1d(256)
         self.fc5 = nn.Linear(256, 128)
         self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(512, 1)
+        self.fc6 = nn.Linear(128, 1)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
 
