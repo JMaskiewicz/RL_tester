@@ -120,7 +120,7 @@ def load_data_2(tickers, timestamp_x):
     return pd.concat(dfs_all, axis=1)
 
 
-def process_ticker(ticker, timestamp_x, agg_dict, project_root):
+def process_ticker_xlsx(ticker, timestamp_x, agg_dict, project_root):
     dfs = []
     ticker_folder = os.path.join(project_root, 'data_sets', ticker)
 
@@ -158,7 +158,7 @@ def load_data_parallel(tickers, timestamp_x):
     dfs_all = []
     with ProcessPoolExecutor() as executor:
         # Submit all tasks to the executor
-        future_to_ticker = {executor.submit(process_ticker, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
+        future_to_ticker = {executor.submit(process_ticker_pkl, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
 
         # Process as they complete
         for future in tqdm(as_completed(future_to_ticker), total=len(tickers), desc='Processing tickers'):
@@ -179,6 +179,33 @@ def load_data_parallel(tickers, timestamp_x):
         print(f"Data loaded in {episode_time} seconds")
         return pd.DataFrame()
 
+def process_ticker_pkl(ticker, timestamp_x, agg_dict, project_root):
+    dfs = []
+    ticker_folder = os.path.join(project_root, 'data_sets', ticker)
+
+    if not os.path.exists(ticker_folder):
+        print(f"Folder for ticker {ticker} does not exist. Skipping...")
+        return None
+
+    for file in os.listdir(ticker_folder):
+        if file.endswith('.pkl'):
+            file_path = os.path.join(ticker_folder, file)
+            df = pd.read_pickle(file_path)
+            dfs.append(df)
+
+    if not dfs:
+        return None
+
+    df_all = pd.concat(dfs)
+    df_all['Date'] = pd.to_datetime(df_all['Date'], format='%Y-%m-%d %H:%M')
+    df_all = df_all.set_index('Date')[['Open', 'High', 'Low', 'Close']]
+    df_all = df_all.resample(timestamp_x).agg(agg_dict).dropna()
+    df_all['Currency'] = ticker
+    df_all.reset_index(inplace=True)
+    df_all.set_index(['Date', 'Currency'], inplace=True)
+    df_all = df_all.unstack('Currency')
+    return df_all
+
 if __name__ == '__main__':
     '''    start_time = time.time()
     df = load_data_2(['WTIUSD', 'BCOUSD'], '1H')
@@ -186,7 +213,7 @@ if __name__ == '__main__':
     episode_time = end_time - start_time
     print(f"Data loaded in {episode_time} seconds")'''
     start_time = time.time()
-    df_2 = load_data_parallel(['WTIUSD', 'BCOUSD'], '1H')
+    df_2 = load_data_parallel(['WTIUSD', 'BCOUSD','EURUSD'], '1H')
     end_time = time.time()
     episode_time = end_time - start_time
     print(f"Data loaded in {episode_time} seconds")
