@@ -51,7 +51,7 @@ def make_predictions_AC(df, environment_class, agent, look_back, variables, trad
     df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
     return df_with_predictions
 
-def calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+def calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage): # TODO merge with and add atributes to make_predictions_AC, getattr(agent, "choose_best_action")
     action_probabilities = []
     env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
 
@@ -167,7 +167,6 @@ class PPOMemory:
         self.static_states = None
         self.batch_size = batch_size
         self.clear_memory()
-
         self.device = device
 
     def generate_batches(self):
@@ -206,7 +205,6 @@ class PPOMemory:
         self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
         self.dones = torch.cat(self.dones, dim=0).to(self.device)
         self.static_states = torch.cat(self.static_states, dim=0).to(self.device)
-
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, n_heads=4, n_layers=3, dropout_rate=1/8, static_input_dims=1):
@@ -336,7 +334,7 @@ class Transformer_PPO_Agent:
             # Generating the data for the entire batch, including static states
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
-            # Convert arrays to tensors and move to the device
+            # Convert arrays to tensors and move to the device # TODO try to parralize this could be worth in large batches size and large number of epochs
             state_arr = state_arr.clone().detach().to(self.device)
             action_arr = action_arr.clone().detach().to(self.device)
             old_prob_arr = old_prob_arr.clone().detach().to(self.device)
@@ -361,8 +359,8 @@ class Transformer_PPO_Agent:
                 batch_states = state_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_actions = action_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_advantages = advantages[minibatch_indices]
-                batch_returns = discounted_rewards[minibatch_indices]
+                batch_advantages = advantages[minibatch_indices].clone().detach().to(self.device)
+                batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
                 batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)  # Static states for the batch
 
                 self.actor_optimizer.zero_grad()
@@ -400,7 +398,6 @@ class Transformer_PPO_Agent:
 
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
-
     def compute_discounted_rewards(self, rewards, values, dones):
         n = len(rewards)
         discounted_rewards = torch.zeros_like(rewards)
@@ -424,7 +421,7 @@ class Transformer_PPO_Agent:
 
         return advantages, discounted_rewards
 
-    def choose_action(self, observation, static_input):
+    def choose_action(self, observation, static_input):  # TODO check if this is correct
         # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
@@ -595,7 +592,7 @@ class Trading_Environment_Basic(gym.Env):
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -638,14 +635,14 @@ if __name__ == '__main__':
     provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 1024
+    batch_size = 4096
     epochs = 1  # 40
-    mini_batch_size = 64
-    leverage = 10
+    mini_batch_size = 256
+    leverage = 1
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    reward_scaling = 100
-    num_episodes = 500  # 100
+    reward_scaling = 1000
+    num_episodes = 2000  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = Transformer_PPO_Agent(n_actions=env.action_space.n,
@@ -674,7 +671,6 @@ if __name__ == '__main__':
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
-
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
@@ -689,7 +685,7 @@ if __name__ == '__main__':
         start_time = time.time()
         initial_balance = env.balance
 
-        while not done:
+        while not done:  # TODO check if this is correct
             current_position = env.current_position
             action, prob, val = agent.choose_action(observation, current_position)
             static_input = current_position

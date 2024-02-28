@@ -179,6 +179,7 @@ def load_data_parallel(tickers, timestamp_x):
         print(f"Data loaded in {episode_time} seconds")
         return pd.DataFrame()
 
+# TODO check parquet
 def process_ticker_pkl(ticker, timestamp_x, agg_dict, project_root):
     dfs = []
     ticker_folder = os.path.join(project_root, 'data_sets', ticker)
