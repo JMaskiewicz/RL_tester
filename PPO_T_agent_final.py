@@ -83,6 +83,7 @@ def calculate_probabilities_wrapper_AC(df, environment_class, agent, look_back, 
 
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None):
     """
+    # TODO: Check if this is correct
     # TODO add description
     # TODO add proper backtest function
     AC - Actor Critic
@@ -106,15 +107,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
             # Calculate log return
             log_return = math.log(next_price / current_price) if current_price != 0 else 0
-            reward = 0
-
-            if action == 1:  # Buying
-                reward = log_return
-            elif action == -1:  # Selling
-                reward = -log_return
-
-            # Apply leverage
-            reward *= leverage
+            reward = log_return * action * leverage
 
             # Calculate cost based on action and current position
             if action != current_position:
@@ -587,8 +580,6 @@ class Trading_Environment_Basic(gym.Env):
 
         return self._next_observation(), final_reward, self.done, {}
 
-# Example usage
-# Stock market variables
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
