@@ -583,7 +583,7 @@ class Trading_Environment_Basic(gym.Env):
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -632,8 +632,8 @@ if __name__ == '__main__':
     leverage = 1
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    reward_scaling = 1000
-    num_episodes = 2000  # 100
+    reward_scaling = 100
+    num_episodes = 1000  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = Transformer_PPO_Agent(n_actions=env.action_space.n,
