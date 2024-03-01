@@ -1,5 +1,5 @@
 """
-Transformer based PPO agent for trading version 1.6
+Transformer based PPO agent for trading version 1.4
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -8,13 +8,6 @@ Transformer based PPO agent for trading version 1.6
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
 - HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
 
-
-Some notes on the code:
-- learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
-- but the backtesting and the generation of actions is slow ie "while not done:" in the learning function
-
-Reward testing:
-- neutral position will be a sqrt(abs(log_return * leverage))
 """
 import numpy as np
 import pandas as pd
@@ -38,14 +31,55 @@ from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
 from data.function.edit import normalize_data, standardize_data
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
+# import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
 
-def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None, plot=False):
+def make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    predictions_df = pd.DataFrame(index=df.index, columns=['Predicted_Action'])
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    agent.actor.eval()
+    agent.critic.eval()
+    with torch.no_grad():
+        for observation_idx in range(len(df) - env.look_back):
+            current_position = env.current_position
+            observation = env.reset(observation_idx, reset_position=False)
+            action = agent.choose_best_action(observation, current_position)
+            predictions_df.iloc[observation_idx + env.look_back] = action
+
+    df_with_predictions = df.copy()
+    df_with_predictions['Predicted_Action'] = predictions_df['Predicted_Action'] - 1
+    return df_with_predictions
+
+def calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage): # TODO merge with and add atributes to make_predictions_AC, getattr(agent, "choose_best_action")
+    action_probabilities = []
+    env = environment_class(df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage)
+
+    agent.actor.eval()
+    agent.critic.eval()
+    with torch.no_grad():
+        for observation_idx in range(len(df) - env.look_back):
+            current_position = env.current_position
+            observation = env.reset(observation_idx, reset_position=False)
+            probs = agent.get_action_probabilities(observation, current_position)
+            action_probabilities.append(probs.tolist())
+
+    probabilities_df = pd.DataFrame(action_probabilities, columns=['Short', 'Neutral', 'Long'])
+    return probabilities_df
+
+def process_dataset_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
+    """
+    # TODO add description
+    """
+    predictions = make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    probabilities = calculate_probabilities_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
+    return predictions, probabilities
+
+def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None):
     # Initial setup
     balance = initial_balance
     total_reward = 0
     number_of_trades = 0
-    balances = [initial_balance]
 
     action_probabilities_list = []
     best_action_list = []
@@ -84,34 +118,11 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
                 # Update balance and total reward
                 balance *= math.exp(reward)
-
-                if best_action == 0:
-                    reward += log_return**2 * math.sqrt(leverage)
-
                 total_reward += reward * reward_scaling
-                balances.append(balance)  # Update daily balance
 
                 # Store action probabilities
                 action_probabilities_list.append(action_probs.tolist())
                 best_action_list.append(best_action)
-
-    # KPI Calculations
-    buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
-    sell_and_hold_return = -buy_and_hold_return
-
-    returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(1000) if returns.std() > 1e-6 else float('nan')  # change 252
-
-    cumulative_returns = (1 + returns).cumprod()
-    peak = cumulative_returns.expanding(min_periods=1).max()
-    drawdown = (cumulative_returns - peak) / peak
-    max_drawdown = drawdown.min()
-
-    negative_volatility = returns[returns < 0].std() * np.sqrt(1000)  # change 252
-    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
-
-    annual_return = cumulative_returns.iloc[-1] ** (1000 / len(returns)) - 1  # change 252
-    calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
     probabilities_df = pd.DataFrame(action_probabilities_list, columns=['Short', 'Neutral', 'Long'])
@@ -121,7 +132,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     agent.actor.train()
     agent.critic.train()
 
-    return balance, total_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+    return balance, total_reward, number_of_trades, probabilities_df, action_df
 
 def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling,
                         Trading_Environment_Basic=None):
@@ -136,6 +147,7 @@ def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
+
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -263,11 +275,7 @@ class CriticNetwork(nn.Module):
         self.ln2 = nn.LayerNorm(1024)
         self.fc3 = nn.Linear(1024, 512)
         self.ln3 = nn.LayerNorm(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.ln4 = nn.LayerNorm(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.ln5 = nn.LayerNorm(128)
-        self.fc6 = nn.Linear(128, 1)
+        self.fc4 = nn.Linear(512, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -283,9 +291,7 @@ class CriticNetwork(nn.Module):
         x = self.relu(self.ln1(self.fc1(combined_features)))
         x = self.relu(self.ln2(self.fc2(x)))
         x = self.relu(self.ln3(self.fc3(x)))
-        x = self.relu(self.ln4(self.fc4(x)))
-        x = self.relu(self.ln5(self.fc5(x)))
-        x = self.fc6(x)
+        x = self.fc4(x)
 
         return x
 
@@ -313,14 +319,12 @@ class Transformer_PPO_Agent:
 
         self.memory = PPOMemory(batch_size, self.device)
 
-        self.generation = 0
-
     def store_transition(self, state, action, probs, vals, reward, done, static_state):
         # Include static_state in the memory storage
         self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
 
     def learn(self):
-        start_time = time.time()
+        print('Learning... CHECK')
         self.actor.train()
         self.critic.train()
 
@@ -379,12 +383,6 @@ class Transformer_PPO_Agent:
 
         # Clear memory after learning
         self.memory.clear_memory()
-
-        # Increment generation of the agent
-        self.generation += 1
-        end_time = time.time()
-        episode_time = end_time - start_time
-        print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
 
     def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns,
                        batch_static_states):
@@ -584,13 +582,8 @@ class Trading_Environment_Basic(gym.Env):
         reward += provision
 
         self.balance *= math.exp(reward)  # Scale reward for learning stability
-
-        if mapped_action == 0:
-            reward = log_return**2 * math.sqrt(self.leverage)
-
         self.current_position = mapped_action
         self.current_step += 1
-
         """
         multiple reward by X to make it more significant and to make it easier for the agent to learn, 
         without this the agent would not learn as the reward is too close to 0
@@ -656,21 +649,21 @@ if __name__ == '__main__':
     ]
 
     tradable_markets = 'EURUSD'
-    window_size = '1M'
+    window_size = '6M'
     starting_balance = 10000
     look_back = 10
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
     provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 8192  # 8192
-    epochs = 10  # 40
+    batch_size = 8192
+    epochs = 1  # 40
     mini_batch_size = 256
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    reward_scaling = 100
-    num_episodes = 750  # 100
+    reward_scaling = 10
+    num_episodes = 50  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables,
                                     tradable_markets=tradable_markets, provision=provision,
@@ -693,42 +686,25 @@ if __name__ == '__main__':
     total_rewards = []
     episode_durations = []
     total_balances = []
-    probs_dfs = {}
-    balances_dfs = {}
-
     episode_probabilities = {'train': [], 'validation': [], 'test': []}
+
+    index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
+    columns = ['Final Balance', 'Dataset Index']
+    backtest_results = pd.DataFrame(index=index, columns=columns)
 
     # Split validation and test datasets into multiple rolling windows
     window_size_2 = '3M'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
-    # Generate index labels for each rolling window dataset
-    def generate_index_labels(rolling_datasets, dataset_type):
-        index_labels = []
-        for dataset in rolling_datasets:
-            last_day = dataset.index[-1].strftime('%Y-%m-%d')
-            label = f"{dataset_type}_{last_day}"
-            index_labels.append(label)
-        return index_labels
-
-    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
-    test_labels = generate_index_labels(test_rolling_datasets, 'test')
-    all_labels = val_labels + test_labels
-
-    # Create a DataFrame to hold backtesting results for all rolling windows
-    columns = ['Agent generation', 'Label', 'Final Balance', 'Number of Trades']
-    backtest_results = pd.DataFrame(columns=columns)
-
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
-    generations_before = 0
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
 
-        print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
         # Create a new environment with the randomly selected window's data
         env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
                                         tradable_markets=tradable_markets, provision=provision,
@@ -741,7 +717,7 @@ if __name__ == '__main__':
         start_time = time.time()
         initial_balance = env.balance
 
-        while not done:
+        while not done:  # TODO check if this is correct
             current_position = env.current_position
             action, prob, val = agent.choose_action(observation, current_position)
             static_input = current_position
@@ -755,43 +731,43 @@ if __name__ == '__main__':
                 agent.learn()
                 agent.memory.clear_memory()
 
-        if agent.generation > generations_before:
+        if episode % 10 == 0:
             start_time_2 = time.time()
-            print("Backtesting on training, validation, and test datasets")
+            print("backtesting on training, validation, and test datasets")
+            # Backtesting in parallel
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                # train_future = executor.submit(backtest_wrapper_AC, df_train, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, reward_scaling, Trading_Environment_Basic=Trading_Environment_Basic)
+                validation_future = executor.submit(backtest_wrapper_AC, df_validation, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, reward_scaling, Trading_Environment_Basic=Trading_Environment_Basic)
+                test_future = executor.submit(backtest_wrapper_AC, df_test, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, reward_scaling, Trading_Environment_Basic=Trading_Environment_Basic)
 
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                futures = []
-                for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                    future = executor.submit(backtest_wrapper_AC, df, agent, 'EURUSD', look_back, variables, provision,starting_balance, leverage, reward_scaling, Trading_Environment_Basic)
-                    futures.append((future, label))
+                # Retrieve results
+                # train_results = train_future.result()
+                validation_results = validation_future.result()
+                test_results = test_future.result()
 
-                # Process completed tasks and append results to DataFrame
-                for future, label in futures:
-                    balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances = future.result()
-                    result_data = {
-                        'Agent generation': agent.generation,
-                        'Label': label,
-                        'Final Balance': balance,
-                        'Total Reward': total_reward,
-                        'Number of Trades': number_of_trades,
-                        'Buy and Hold Return': buy_and_hold_return,
-                        'Sell and Hold Return': sell_and_hold_return,
-                        'Sharpe Ratio': sharpe_ratio,
-                        'Max Drawdown': max_drawdown,
-                        'Sortino Ratio': sortino_ratio,
-                        'Calmar Ratio': calmar_ratio
-                    }
-                    temp_df = pd.DataFrame([result_data])
-                    backtest_results = pd.concat([backtest_results, temp_df], ignore_index=True)
+            # Unpack results
+            # train_balance, train_total_rewards, train_number_of_trades, train_probs_df, train_action_df = train_results
+            validation_balance, validation_total_rewards, validation_number_of_trades, validation_probs_df, validation_action_df = validation_results
+            test_balance, test_total_rewards, test_number_of_trades, test_probs_df, test_action_df = test_results
 
-                    # Store probabilities and balances for plotting
-                    probs_dfs[(agent.generation, label)] = probs_df
-                    balances_dfs[(agent.generation, label)] = balances
+            # Update backtest results DataFrame for all datasets
+            backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
+            backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
+            backtest_results.loc[(episode, 'validation'), 'Final Reward'] = validation_total_rewards
+            backtest_results.loc[(episode, 'test'), 'Final Reward'] = test_total_rewards
+            backtest_results.loc[(episode, 'validation'), 'Number of Trades'] = validation_number_of_trades
+            backtest_results.loc[(episode, 'test'), 'Number of Trades'] = test_number_of_trades
+            backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
+            backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
 
-            generations_before = agent.generation
+            # Assuming you have a way to store or process these DataFrames
+            # episode_probabilities['train'].append(train_probs_df[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+            episode_probabilities['validation'].append(validation_probs_df[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+            episode_probabilities['test'].append(test_probs_df[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+
             end_time_2 = time.time()
             episode_time_2 = end_time_2 - start_time_2
-            print(f"Backtesting completed in {episode_time_2:.2f} seconds")
+            print(f"Backtesting on training, validation, and test datasets took {episode_time_2:.2f} seconds")
 
         # results
         end_time = time.time()
@@ -800,11 +776,59 @@ if __name__ == '__main__':
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
-        print("-----------------------------------\n")
+        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+        print("-----------------------------------")
 
     # Plotting the results after all episodes
-    backtest_results.set_index('Agent generation', inplace=True)
     print(backtest_results)
-    # TODO plots for the results
+
+    # final prediction agent
+    # predictions and probabilities for train, validation and test calculated in parallel
+    from backtest.plots.plot import plot_all
+    from backtest.plots.OHLC_probability_plot import OHLC_probability_plot
+
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        datasets = [df_train, df_validation, df_test]
+        for df in datasets:
+            futures.append(
+                executor.submit(process_dataset_AC, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
+
+        results = [future.result() for future in futures]
+
+    # Unpack results
+    df_train_with_predictions, df_train_with_probabilities = results[0]
+    df_validation_with_predictions, df_validation_with_probabilities = results[1]
+    df_test_with_predictions, df_test_with_probabilities = results[2]
+
+    # Extracting data for plotting
+    validation_pnl = backtest_results.loc[(slice(None), 'validation'), 'Final Balance']
+    test_pnl = backtest_results.loc[(slice(None), 'test'), 'Final Balance']
+
+    # plotting everything
+    probabilities_sets = {
+        'Validation': df_validation_with_probabilities,
+        'Train': df_train_with_probabilities,
+        'Test': df_test_with_probabilities
+    }
+
+    plot_all(
+        total_rewards=total_rewards,
+        episode_durations=episode_durations,
+        total_balances=total_balances,
+        num_episodes=num_episodes,
+        validation_pnl=validation_pnl,
+        test_pnl=test_pnl,
+        probabilities_sets=probabilities_sets,
+        plot_rewards=True,
+        plot_durations=True,
+        plot_balances=True,
+        plot_pnl=True,
+        plot_probabilities=True,
+        model_name=agent.get_name(),
+    )
+
+    ###
+    OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilities, portnumber=8060)
+
     print('end')

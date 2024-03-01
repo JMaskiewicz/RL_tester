@@ -1,5 +1,5 @@
 """
-Transformer based PPO agent for trading version 1.6
+Transformer based PPO agent for trading version 2.1
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -724,6 +724,10 @@ if __name__ == '__main__':
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
     generations_before = 0
+    '''
+    test use Rlib to parallelize the experince collection
+    '''
+
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)

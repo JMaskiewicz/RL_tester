@@ -38,7 +38,9 @@ from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
 from data.function.edit import normalize_data, standardize_data
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
+# import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
+
 
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000, leverage=1, reward_scaling=1, Trading_Environment_Basic=None, plot=False):
     # Initial setup
@@ -656,7 +658,7 @@ if __name__ == '__main__':
     ]
 
     tradable_markets = 'EURUSD'
-    window_size = '1M'
+    window_size = '6M'
     starting_balance = 10000
     look_back = 10
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
@@ -741,7 +743,7 @@ if __name__ == '__main__':
         start_time = time.time()
         initial_balance = env.balance
 
-        while not done:
+        while not done:  # TODO check if this is correct
             current_position = env.current_position
             action, prob, val = agent.choose_action(observation, current_position)
             static_input = current_position
