@@ -38,7 +38,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-# from data.function.edit import normalize_data, standardize_data
+from data.function.edit import process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 # import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
@@ -55,78 +55,64 @@ def reward_calculation(previous_close, current_close, previous_position, current
     if reward_return < 0:
         reward_return = 3 * reward_return
 
-    reward += reward_return * 1000 - provision_cost * 100
+    reward += reward_return * 1000 - provision_cost * 10
 
     return reward
 
 
-def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000,
-                                         leverage=1, Trading_Environment_Basic=None, plot=False):
-    # Initial setup
-    balance = initial_balance
-    total_reward = 0
-    number_of_trades = 0
-    balances = [initial_balance]
-
+def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    """
     action_probabilities_list = []
     best_action_list = []
+    balances = []
+    number_of_trades = 0
 
     # Preparing the environment
-    env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=[mkf],
-                                    provision=provision, initial_balance=initial_balance, leverage=leverage)
     agent.actor.eval()
     agent.critic.eval()
 
-    with torch.no_grad():  # Disable gradient computation
-        for observation_idx in range(len(df) - env.look_back):
-            # Environment observation
-            current_position = env.current_position
-            observation = env.reset(observation_idx, reset_position=False)
+    with torch.no_grad():
+        # Create a backtesting environment
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage)
 
-            # Get action probabilities for the current observation
-            action_probs = agent.get_action_probabilities(observation, current_position)
-            best_action = np.argmax(action_probs) - 1  # Adjusting action scale if necessary
+        observation = env.reset()
+        done = False
+        cumulative_reward = 0
 
-            # Simulate the action in the environment
-            if observation_idx + env.look_back < len(df):
-                current_price = df[('Close', mkf)].iloc[observation_idx + env.look_back - 1]
-                next_price = df[('Close', mkf)].iloc[observation_idx + env.look_back]
-                market_return = next_price / current_price - 1
+        while not done:  # TODO check if this is correct
+            action_probs = agent.get_action_probabilities(observation, env.current_position)
+            best_action = np.argmax(action_probs)
+            observation_, reward, done, info = env.step(best_action)
+            observation = observation_
+            cumulative_reward += reward
 
-                if best_action != current_position:
-                    provision_cost = provision * (abs(best_action) == 1)
-                    number_of_trades += 1
-                else:
-                    provision_cost = 0
-                # TODO there is something wrong balance is only decreasing ???
-                balance *= (1 + market_return * current_position * leverage - provision_cost)
-                balances.append(balance)  # Update daily balance
+            balances.append(env.balance)  # Update balances
+            action_probabilities_list.append(action_probs.tolist())
+            best_action_list.append(best_action-1)
 
-                # Store action probabilities
-                action_probabilities_list.append(action_probs.tolist())
-                best_action_list.append(best_action)
-                current_position = best_action
-
-                total_reward += reward_calculation(current_price, next_price, current_position, best_action, leverage,
-                                                   provision)
+            if best_action != env.current_position:
+                number_of_trades += 1
 
     # KPI Calculations
     buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
     sell_and_hold_return = -buy_and_hold_return
 
     returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df) - env.look_back) if returns.std() > 1e-6 else float(
-        'nan')  # change 252
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
 
     cumulative_returns = (1 + returns).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
     drawdown = (cumulative_returns - peak) / peak
     max_drawdown = drawdown.min()
 
-    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - env.look_back)  # change 252
+    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)  # change 252
     sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
 
-    annual_return = cumulative_returns.iloc[-1] ** ((len(df) - env.look_back) / len(returns)) - 1  # change 252
+    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1  # change 252
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
@@ -137,7 +123,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     agent.actor.train()
     agent.critic.train()
 
-    return balance, total_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+    return env.balance, cumulative_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
 
 def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
@@ -621,36 +607,6 @@ class Trading_Environment_Basic(gym.Env):
 
         return self._next_observation(), final_reward, self.done, {}
 
-
-from numba import jit
-
-
-# this speed up calculations by 10% (3s per episode)
-@jit(nopython=True)
-def normalize_data(data):
-    min_val = np.min(data)
-    max_val = np.max(data)
-    normalized = (data - min_val) / (max_val - min_val)
-    return normalized
-
-
-@jit(nopython=True)
-def standardize_data(data):
-    mean_val = np.mean(data)
-    std_val = np.std(data)
-    standardized = (data - mean_val) / std_val
-    return standardized
-
-
-def process_variable(data, edit_type):
-    if edit_type == 'standardize':
-        return standardize_data(data)
-    elif edit_type == 'normalize':
-        return normalize_data(data)
-    else:
-        return data
-
-
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
@@ -707,7 +663,7 @@ if __name__ == '__main__':
     tradable_markets = 'EURUSD'
     window_size = '3M'
     starting_balance = 10000
-    look_back = 15
+    look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
@@ -718,24 +674,23 @@ if __name__ == '__main__':
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    num_episodes = 2000  # 100
+    num_episodes = 200  # 100
     # Create the environment
-    env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables,
-                                    tradable_markets=tradable_markets, provision=provision,
-                                    initial_balance=starting_balance, leverage=leverage, )
-    agent = Transformer_PPO_Agent(n_actions=3,  # 3 actions: sell, hold, buy
-                                  input_dims=env.calculate_input_dims(),
-                                  gamma=0.9,
-                                  alpha=0.0005,  # learning rate for actor network
+    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
+                                  input_dims=len(variables) * look_back,  # input dimensions
+                                  gamma=0.9,  # discount factor for future rewards
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.15,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
-                                  batch_size=batch_size,
-                                  n_epochs=epochs,
-                                  mini_batch_size=mini_batch_size,
-                                  weight_decay=weight_decay,
-                                  l1_lambda=l1_lambda,
-                                  static_input_dims=1)
+                                  batch_size=batch_size,  # size of the memory
+                                  n_epochs=epochs,  # number of epochs
+                                  mini_batch_size=mini_batch_size,  # size of the mini-batches
+                                  weight_decay=weight_decay,  # weight decay
+                                  l1_lambda=l1_lambda,  # L1 regularization lambda
+                                  static_input_dims=1,  # static input dimensions (current position)
+                                  lr_decay_rate=0.99,  # learning rate decay rate
+                                  )
 
     total_rewards = []
     episode_durations = []

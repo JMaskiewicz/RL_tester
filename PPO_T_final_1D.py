@@ -54,57 +54,46 @@ def reward_calculation(previous_close, current_close, previous_position, current
     if reward_return < 0:
         reward_return = 2 * reward_return
 
-    reward += reward_return * 1000 - provision_cost * 200
+    reward += reward_return * 10000 - provision_cost * 10
 
     return reward
 
-def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000, leverage=1, Trading_Environment_Basic=None, plot=False):
-    # Initial setup
-    balance = initial_balance
-    total_reward = 0
-    number_of_trades = 0
-    balances = [initial_balance]
-
+def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    """
     action_probabilities_list = []
     best_action_list = []
+    balances = []
+    number_of_trades = 0
 
     # Preparing the environment
-    env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=[mkf],
-                                     provision=provision, initial_balance=initial_balance, leverage=leverage)
     agent.actor.eval()
     agent.critic.eval()
 
-    with torch.no_grad():  # Disable gradient computation
-        for observation_idx in range(len(df) - env.look_back):
-            # Environment observation
-            current_position = env.current_position
-            observation = env.reset(observation_idx, reset_position=False)
+    with torch.no_grad():
+        # Create a backtesting environment
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage)
 
-            # Get action probabilities for the current observation
-            action_probs = agent.get_action_probabilities(observation, current_position)
-            best_action = np.argmax(action_probs) - 1  # Adjusting action scale if necessary
+        observation = env.reset()
+        done = False
+        cumulative_reward = 0
 
-            # Simulate the action in the environment
-            if observation_idx + env.look_back < len(df):
-                current_price = df[('Close', mkf)].iloc[observation_idx + env.look_back - 1]
-                next_price = df[('Close', mkf)].iloc[observation_idx + env.look_back]
-                market_return = next_price / current_price - 1
+        while not done:  # TODO check if this is correct
+            action_probs = agent.get_action_probabilities(observation, env.current_position)
+            best_action = np.argmax(action_probs)
+            observation_, reward, done, info = env.step(best_action)
+            observation = observation_
+            cumulative_reward += reward
 
-                if best_action != current_position:
-                    provision_cost = provision * (abs(best_action) == 1)
-                    number_of_trades += 1
-                else:
-                    provision_cost = 0
-                # TODO there is something wrong balance is only decreasing ???
-                balance *= (1 + market_return * current_position * leverage - provision_cost)
-                balances.append(balance)  # Update daily balance
+            balances.append(env.balance)  # Update balances
+            action_probabilities_list.append(action_probs.tolist())
+            best_action_list.append(best_action-1)
 
-                # Store action probabilities
-                action_probabilities_list.append(action_probs.tolist())
-                best_action_list.append(best_action)
-                current_position = best_action
-
-                total_reward += reward_calculation(current_price, next_price, current_position, best_action, leverage, provision)
+            if best_action != env.current_position:
+                number_of_trades += 1
 
     # KPI Calculations
     buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
@@ -132,7 +121,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     agent.actor.train()
     agent.critic.train()
 
-    return balance, total_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+    return env.balance, cumulative_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
 def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
                         Trading_Environment_Basic=None):
@@ -602,7 +591,7 @@ class Trading_Environment_Basic(gym.Env):
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -669,7 +658,7 @@ if __name__ == '__main__':
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.9,  # discount factor for future rewards
-                                  alpha=0.01,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.15,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -751,7 +740,7 @@ if __name__ == '__main__':
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = []
                 for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                    future = executor.submit(backtest_wrapper_AC, df, agent, 'EURUSD', look_back, variables, provision,starting_balance, leverage, Trading_Environment_Basic)
+                    future = executor.submit(backtest_wrapper_AC, df, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, Trading_Environment_Basic)
                     futures.append((future, label))
 
                 # Process completed tasks and append results to DataFrame
