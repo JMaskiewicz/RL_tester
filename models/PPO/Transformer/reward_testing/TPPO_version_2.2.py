@@ -672,12 +672,8 @@ if __name__ == '__main__':
     reward_scaling = 100
     num_episodes = 750  # 100
     # Create the environment
-    env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables,
-                                    tradable_markets=tradable_markets, provision=provision,
-                                    initial_balance=starting_balance, leverage=leverage,
-                                    reward_scaling=reward_scaling)
-    agent = Transformer_PPO_Agent(n_actions=env.action_space.n,
-                                  input_dims=env.calculate_input_dims(),
+    agent = Transformer_PPO_Agent(n_actions=3, # 3 actions: sell, hold, buy
+                                  input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.9,
                                   alpha=0.0005,  # learning rate for actor network
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
@@ -725,8 +721,38 @@ if __name__ == '__main__':
     dataset_iterator = cycle(rolling_datasets)
     generations_before = 0
     '''
-    test use Rlib to parallelize the experince collection
+    # TODO parallelize the experince collection
     '''
+    def run_environment(env_config, agent, max_steps=1000):
+        env = Trading_Environment_Basic(**env_config)
+        observation = env.reset()
+        done = False
+        steps = 0
+
+        while not done and steps < max_steps:
+            action, prob, val = agent.choose_action(observation)
+            new_observation, reward, done, info = env.step(action)
+            agent.store_transition(observation, action, prob, val, reward, done)
+            observation = new_observation
+            steps += 1
+
+    from multiprocessing import Process
+    from concurrent.futures import ThreadPoolExecutor
+
+    def collect_data_parallel(agent, env_configs):
+        processes = []
+        for env_config in env_configs:
+            p = Process(target=run_environment, args=(env_config, agent))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        # After all processes join, check if enough data is collected to proceed with learning
+        if len(agent.memory.states) >= agent.memory.batch_size:
+            agent.learn()
+            agent.memory.clear_memory()
 
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
