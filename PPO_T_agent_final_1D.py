@@ -43,20 +43,30 @@ from technical_analysys.add_indicators import add_indicators, add_returns, add_l
 # import backtest.backtest_functions.functions as BF
 from functions.utilis import save_actor_critic_model
 
+"""
+Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
+"""
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
-    reward = 0
-    reward_return = (current_close / previous_close - 1) * current_position * leverage
-    if previous_position != current_position:
-        provision_cost = provision * (abs(current_position) == 1)
+    if previous_close != 0 and current_close != 0:
+        log_return = math.log(current_close / previous_close)
+    else:
+        log_return = 0
+
+    reward = log_return * current_position * leverage
+
+    # Calculate the cost of provision if the position has changed and it's not neutral (0).
+    if current_position != previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 - provision)
     else:
         provision_cost = 0
 
-    if reward_return < 0:
-        reward_return = 2 * reward_return
+    # Apply the provision cost
+    reward += provision_cost
 
-    reward += reward_return * 10000 - provision_cost * 10
+    # Scale the reward to enhance its significance for the learning process
+    final_reward = reward * 100
 
-    return reward
+    return final_reward
 
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
     """
@@ -85,7 +95,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
             action_probs = agent.get_action_probabilities(observation, env.current_position)
             best_action = np.argmax(action_probs)
 
-            if best_action != env.current_position:
+            if (best_action-1) != env.current_position and abs(best_action-1) == 1:
                 number_of_trades += 1
 
             observation_, reward, done, info = env.step(best_action)
@@ -213,7 +223,11 @@ class ActorNetwork(nn.Module):
         self.ln2 = nn.LayerNorm(1024)
         self.fc3 = nn.Linear(1024, 512)
         self.ln3 = nn.LayerNorm(512)
-        self.fc6 = nn.Linear(512, n_actions)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, n_actions)
 
         self.relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -231,6 +245,8 @@ class ActorNetwork(nn.Module):
         x = self.relu(self.ln1(self.fc1(combined_features)))
         x = self.relu(self.ln2(self.fc2(x)))
         x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
         x = self.fc6(x)
 
         return self.softmax(x)
@@ -259,7 +275,11 @@ class CriticNetwork(nn.Module):
         self.ln2 = nn.LayerNorm(1024)
         self.fc3 = nn.Linear(1024, 512)
         self.ln3 = nn.LayerNorm(512)
-        self.fc6 = nn.Linear(512, 1)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -275,6 +295,8 @@ class CriticNetwork(nn.Module):
         x = self.relu(self.ln1(self.fc1(combined_features)))
         x = self.relu(self.ln2(self.fc2(x)))
         x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
         x = self.fc6(x)
 
         return x
@@ -593,7 +615,7 @@ class Trading_Environment_Basic(gym.Env):
 if __name__ == '__main__':
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -635,32 +657,28 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": None},
         {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
     window_size = '1Y'
     starting_balance = 10000
-    look_back = 16
+    look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     batch_size = 1024  # 8192
     epochs = 10  # 40
-    mini_batch_size = 64
+    mini_batch_size = 128
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    num_episodes = 2000  # 100
+    num_episodes = 20  # 100
     # Create the environment
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.9,  # discount factor for future rewards
-                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.15,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -680,7 +698,7 @@ if __name__ == '__main__':
     balances_dfs = {}
 
     # Split validation and test datasets into multiple rolling windows
-    window_size_2 = '6M'
+    window_size_2 = '3M'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
@@ -708,7 +726,6 @@ if __name__ == '__main__':
 
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
-        dataset_index = episode % len(rolling_datasets)
         print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
 
         # Create a new environment with the randomly selected window's data
@@ -720,7 +737,6 @@ if __name__ == '__main__':
         done = False
         cumulative_reward = 0
         start_time = time.time()
-        initial_balance = env.balance
 
         while not done:  # TODO check if this is correct
             current_position = env.current_position
@@ -786,6 +802,13 @@ if __name__ == '__main__':
     # Plotting the results after all episodes
     backtest_results.set_index('Agent generation', inplace=True)
     print(backtest_results)
+
+    # Finding the agent generations with all 'Final Balance' values greater than 10500
+    generations_with_all_balances_above_10500 = backtest_results.groupby(level=0).filter(
+        lambda x: (x['Final Balance'] > 10500).all()).index.unique()
+
+    print(generations_with_all_balances_above_10500)
+
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_episode_durations, plot_total_balances
     from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
