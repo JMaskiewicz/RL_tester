@@ -1,11 +1,11 @@
 ###
 import dash
 from dash import dcc, html
-import plotly.graph_objects as go
 from dash.dependencies import Input, Output
-import webbrowser
+import plotly.graph_objects as go
 import pandas as pd
-
+import webbrowser
+from threading import Timer
 
 def OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilities, portnumber=8062):
     def get_ohlc_data(selected_dataset, market):
@@ -72,3 +72,114 @@ def OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilitie
 
     app.run_server(debug=True, port=portnumber)
     webbrowser.open(f"http://127.0.0.1:{portnumber}/")
+
+def PnL_generation_plot(balances_dfs, port_number=8050):
+    # Transforming your data structure into a suitable format for plotting
+    records = []
+    for (agent_gen, data_set), balances in balances_dfs.items():
+        df = pd.DataFrame({'Balance': balances, 'Time Step': range(len(balances))})
+        df['Agent Generation'] = agent_gen
+        df['DATA_SET'] = data_set
+        records.append(df)
+
+    flattened_df = pd.concat(records)
+
+    # Initialize Dash app
+    app = dash.Dash(__name__)
+
+    # App layout
+    app.layout = html.Div([
+        html.H4('Interactive PnL Plot'),
+        dcc.Dropdown(
+            id='agent-gen-dropdown',
+            options=[{'label': f'Agent Generation {i}', 'value': i} for i in flattened_df['Agent Generation'].unique()],
+            value=flattened_df['Agent Generation'].unique()[0],
+            clearable=False
+        ),
+        dcc.Dropdown(
+            id='data-set-dropdown',
+            options=[{'label': ds, 'value': ds} for ds in flattened_df['DATA_SET'].unique()],
+            value=flattened_df['DATA_SET'].unique()[0],
+            clearable=False
+        ),
+        dcc.Graph(id='pnl-plot')
+    ])
+
+    # Callback to update the graph based on dropdown selections
+    @app.callback(
+        Output('pnl-plot', 'figure'),
+        [Input('agent-gen-dropdown', 'value'),
+         Input('data-set-dropdown', 'value')]
+    )
+    def update_graph(selected_agent_gen, selected_data_set):
+        filtered_df = flattened_df[
+            (flattened_df['Agent Generation'] == selected_agent_gen) & (flattened_df['DATA_SET'] == selected_data_set)]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df['Balance'], mode='lines', name='Balance'))
+
+        fig.update_layout(title='PnL Over Time', xaxis_title='Time Step', yaxis_title='Balance')
+        return fig
+
+    # Open the web browser and then start the server
+    def open_browser():
+        webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
+
+    Timer(1, open_browser).start()
+    app.run_server(debug=True, port=port_number)
+
+def Probability_generation_plot(probs_dfs, port_number=8050):
+    # Transforming your data structure into a suitable format for plotting
+    records = []
+    for (agent_gen, data_set), df in probs_dfs.items():
+        df['Agent Generation'] = agent_gen
+        df['DATA_SET'] = data_set
+        df['Time Step'] = df.index
+        records.append(df)
+
+    flattened_df = pd.concat(records)
+
+    # Initialize Dash app
+    app = dash.Dash(__name__)
+
+    # App layout
+    app.layout = html.Div([
+        html.H4('Interactive Probability Plot'),
+        dcc.Dropdown(
+            id='agent-gen-dropdown',
+            options=[{'label': f'Agent Generation {i}', 'value': i} for i in flattened_df['Agent Generation'].unique()],
+            value=flattened_df['Agent Generation'].unique()[0],
+            clearable=False
+        ),
+        dcc.Dropdown(
+            id='data-set-dropdown',
+            options=[{'label': ds, 'value': ds} for ds in flattened_df['DATA_SET'].unique()],
+            value=flattened_df['DATA_SET'].unique()[0],
+            clearable=False
+        ),
+        dcc.Graph(id='probability-plot')
+    ])
+
+    # Callback to update the graph based on dropdown selections
+    @app.callback(
+        Output('probability-plot', 'figure'),
+        [Input('agent-gen-dropdown', 'value'),
+         Input('data-set-dropdown', 'value')]
+    )
+    def update_graph(selected_agent_gen, selected_data_set):
+        filtered_df = flattened_df[
+            (flattened_df['Agent Generation'] == selected_agent_gen) & (flattened_df['DATA_SET'] == selected_data_set)]
+
+        fig = go.Figure()
+        for col in ['Short', 'Neutral', 'Long']:
+            fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df[col], mode='lines', name=col))
+
+        fig.update_layout(title='Probabilities Over Time', xaxis_title='Time Step', yaxis_title='Probability')
+        return fig
+
+    # Function to open the web browser and then start the server
+    def open_browser():
+        webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
+
+    Timer(1, open_browser).start()
+    app.run_server(debug=True, port=port_number)

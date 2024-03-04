@@ -34,6 +34,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
@@ -94,13 +95,14 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
                     number_of_trades += 1
                 else:
                     provision_cost = 0
-
+                # TODO there is something wrong balance is only decreasing ???
                 balance *= (1 + market_return * current_position * leverage - provision_cost)
                 balances.append(balance)  # Update daily balance
 
                 # Store action probabilities
                 action_probabilities_list.append(action_probs.tolist())
                 best_action_list.append(best_action)
+                current_position = best_action
 
                 total_reward += reward_calculation(current_price, next_price, current_position, best_action, leverage, provision)
 
@@ -109,17 +111,17 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     sell_and_hold_return = -buy_and_hold_return
 
     returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(1000) if returns.std() > 1e-6 else float('nan')  # change 252
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
 
     cumulative_returns = (1 + returns).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
     drawdown = (cumulative_returns - peak) / peak
     max_drawdown = drawdown.min()
 
-    negative_volatility = returns[returns < 0].std() * np.sqrt(1000)  # change 252
+    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)  # change 252
     sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
 
-    annual_return = cumulative_returns.iloc[-1] ** (1000 / len(returns)) - 1  # change 252
+    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1  # change 252
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
@@ -302,7 +304,7 @@ class CriticNetwork(nn.Module):
 class Transformer_PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5,
-                 static_input_dims=1):
+                 static_input_dims=1, lr_decay_rate=0.99):
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
         self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -313,12 +315,16 @@ class Transformer_PPO_Agent:
         self.mini_batch_size = mini_batch_size
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
+        self.lr_decay_rate = lr_decay_rate
 
         # Initialize the actor and critic networks with static input dimensions
         self.actor = ActorNetwork(n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
         self.critic = CriticNetwork(input_dims, static_input_dims=static_input_dims).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
+
+        self.actor_scheduler = ExponentialLR(self.actor_optimizer, gamma=self.lr_decay_rate)
+        self.critic_scheduler = ExponentialLR(self.critic_optimizer, gamma=self.lr_decay_rate)
 
         self.memory = PPOMemory(batch_size, self.device)
 
@@ -385,6 +391,10 @@ class Transformer_PPO_Agent:
 
                 critic_loss.backward()
                 self.critic_optimizer.step()
+
+            # Decay learning rate
+            self.actor_scheduler.step()
+            self.critic_scheduler.step()
 
         # Clear memory after learning
         self.memory.clear_memory()
@@ -827,5 +837,18 @@ if __name__ == '__main__':
     # Plotting the results after all episodes
     backtest_results.set_index('Agent generation', inplace=True)
     print(backtest_results)
-    # TODO plots for the results
+
+    from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_episode_durations, \
+        plot_total_balances
+
+    plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
+    plot_total_rewards(total_rewards, agent.get_name())
+    plot_episode_durations(episode_durations, agent.get_name())
+    plot_total_balances(total_balances, agent.get_name())
+
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
+
+    PnL_generation_plot(balances_dfs, port_number=8050)
+    Probability_generation_plot(probs_dfs, port_number=8051)
+
     print('end')
