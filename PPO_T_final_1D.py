@@ -84,6 +84,10 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
         while not done:  # TODO check if this is correct
             action_probs = agent.get_action_probabilities(observation, env.current_position)
             best_action = np.argmax(action_probs)
+
+            if best_action != env.current_position:
+                number_of_trades += 1
+
             observation_, reward, done, info = env.step(best_action)
             observation = observation_
             cumulative_reward += reward
@@ -92,8 +96,6 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
             action_probabilities_list.append(action_probs.tolist())
             best_action_list.append(best_action-1)
 
-            if best_action != env.current_position:
-                number_of_trades += 1
 
     # KPI Calculations
     buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
@@ -653,7 +655,7 @@ if __name__ == '__main__':
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    num_episodes = 20  # 100
+    num_episodes = 2000  # 100
     # Create the environment
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
@@ -786,13 +788,12 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_episode_durations, plot_total_balances
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
 
     plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_episode_durations(episode_durations, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
-
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
 
     PnL_generation_plot(balances_dfs, port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)
