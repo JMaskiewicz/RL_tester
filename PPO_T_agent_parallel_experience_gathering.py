@@ -12,7 +12,7 @@ Transformer based PPO agent for trading version 4.1
 
 Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
-- but the backtesting and the generation of actions is slow ie "while not done:" in the learning function
+- higher number of epochs agent would less likely to take a neutral position
 
 Reward testing:
 - higher penalty for wrong actions this would make agent more likely to take a neutral position
@@ -55,25 +55,35 @@ from functions.utilis import save_actor_critic_model
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
 """
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
-    reward = 0
-    reward_return = (current_close / previous_close - 1) * current_position * leverage
-    if previous_position != current_position:
-        provision_cost = provision * (abs(current_position) == 1)
+    if previous_close != 0 and current_close != 0:
+        log_return = math.log(current_close / previous_close)
+    else:
+        log_return = 0
+
+    reward = log_return * current_position * leverage
+
+    if reward < 0:
+        reward *= 2
+
+    # Calculate the cost of provision if the position has changed, and it's not neutral (0).
+    if current_position != previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 - provision) * 10
     else:
         provision_cost = 0
 
-    if reward_return < 0:
-        reward_return = 3 * reward_return
-
     # if agent keep position he will get reward equal to provision cost
     if previous_position == current_position and current_position != 0:
-        holdinng_premium = provision_cost
+        holdinng_premium = math.log(1 + provision)
     else:
         holdinng_premium = 0
 
-    reward += reward_return * 1000 - provision_cost * 10 + holdinng_premium * 10
+    # Apply the provision cost
+    reward += provision_cost
 
-    return reward
+    # Scale the reward to enhance its significance for the learning process
+    final_reward = reward * 1000 + holdinng_premium
+
+    return final_reward
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -347,16 +357,23 @@ class Transformer_PPO_Agent:
 
     def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns,
                        batch_static_states):
+        # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
         if batch_states.dim() == 2:
             batch_states = batch_states.unsqueeze(1)
 
         # Actor loss calculations
         new_probs = self.actor(batch_states, batch_static_states)
+        # Calculate the probability ratio and the surrogate loss
         dist = torch.distributions.Categorical(new_probs)
+        # Calculate the log probability of the action in the distribution
         new_log_probs = dist.log_prob(batch_actions)
+        # Calculate the probability ratio
         prob_ratios = torch.exp(new_log_probs - batch_old_probs)
+        # Calculate the surrogate loss
         surr1 = prob_ratios * batch_advantages
+        # Clipped surrogate loss
         surr2 = torch.clamp(prob_ratios, 1.0 - self.policy_clip, 1.0 + self.policy_clip) * batch_advantages
+        # Actor loss
         actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * dist.entropy().mean()
 
         # Critic loss calculations
@@ -627,8 +644,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
     return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
-def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
-                        Trading_Environment_Basic=None):
+def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None):
     """
     # TODO add description
     AC - Actor Critic
@@ -724,8 +740,9 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
     if workers_completed.value == max_episodes_per_worker:
         workers_completed_signal.set()
 
-
-def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent, num_workers, num_workers_backtesting):
+# TODO add description
+# TODO add early stopping based on the validation set from the backtesting
+def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=1):
     manager = Manager()
     total_rewards = manager.list()
     total_balances = manager.list()
@@ -801,7 +818,7 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
                 for resume_signal in resume_signals:
                     resume_signal.set()
 
-                if agent.generation > agent_generation and agent.generation % 5 == 0:
+                if agent.generation > agent_generation and agent.generation % backtesting_frequency == 0:
                     backtesting_completed.clear()
                     backtest_thread = Thread(target=backtest_in_background, args=(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed))
                     backtest_thread.start()
@@ -922,12 +939,12 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'
-    validation_date = '2022-01-01'
-    test_date = '2023-01-01'
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2021-01-01'
+    test_date = '2022-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:]
+    df_test = df[test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "normalize"},
@@ -936,12 +953,12 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": None},
         {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        # {"variable": ("sin_time_1D", ""), "edit": None},
-        # {"variable": ("cos_time_1D", ""), "edit": None},
-        # {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        # {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        # {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        # {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        {"variable": ("sin_time_1D", ""), "edit": None},
+        {"variable": ("cos_time_1D", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -964,7 +981,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 80  # need to be divisible by num_workers
+    num_episodes = 600  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -990,7 +1007,7 @@ if __name__ == '__main__':
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.975,  # discount factor for future rewards
-                                  alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -1026,7 +1043,7 @@ if __name__ == '__main__':
     dataset_iterator = cycle(rolling_datasets)
 
     # Collecting and learning data in parallel
-    total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting)
+    total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=5)
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(df)
