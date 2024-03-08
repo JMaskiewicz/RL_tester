@@ -71,17 +71,11 @@ def reward_calculation(previous_close, current_close, previous_position, current
     else:
         provision_cost = 0
 
-    # if agent keep position he will get reward equal to provision cost
-    if previous_position == current_position and current_position != 0:
-        holdinng_premium = math.log(1 + provision)
-    else:
-        holdinng_premium = 0
-
     # Apply the provision cost
     reward += provision_cost
 
     # Scale the reward to enhance its significance for the learning process
-    final_reward = reward * 1000 + holdinng_premium
+    final_reward = reward * 100
 
     return final_reward
 
@@ -245,7 +239,6 @@ class Transformer_PPO_Agent:
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
         self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.gamma = gamma
         self.gamma = gamma  # Discount factor
         self.policy_clip = policy_clip  # PPO policy clipping parameter
         self.n_epochs = n_epochs  # Number of optimization epochs per batch
@@ -292,12 +285,12 @@ class Transformer_PPO_Agent:
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
             # Convert arrays to tensors and move to the device
-            state_arr = state_arr.clone().detach().to(self.device)
-            action_arr = action_arr.clone().detach().to(self.device)
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)
-            vals_arr = vals_arr.clone().detach().to(self.device)
-            reward_arr = reward_arr.clone().detach().to(self.device)
-            dones_arr = dones_arr.clone().detach().to(self.device)
+            state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
+            action_arr = action_arr.clone().detach().to(self.device)  # Actions
+            old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
+            vals_arr = vals_arr.clone().detach().to(self.device)  # State values
+            reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
+            dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
             static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
 
             # Compute advantages and discounted rewards
@@ -347,9 +340,11 @@ class Transformer_PPO_Agent:
 
         # Increment generation of the agent
         self.generation += 1
+
         # track the time it takes to learn
         end_time = time.time()
         episode_time = end_time - start_time
+
         # print the time it takes to learn
         print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 50)
@@ -383,24 +378,33 @@ class Transformer_PPO_Agent:
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
     def compute_discounted_rewards(self, rewards, values, dones):
+        # Calculate advantages and discounted returns
         n = len(rewards)
+        # Create tensors to store advantages and discounted returns
         discounted_rewards = torch.zeros_like(rewards)
         advantages = torch.zeros_like(rewards)
+        # Initialize the advantage and the last GAE (Generalized Advantage Estimation) lambda
         last_gae_lam = 0
 
         # Convert 'dones' to a float tensor
         dones = dones.float()
 
         for t in reversed(range(n)):
+            # If the current time step is the last one, the next non-terminal is 0
             if t == n - 1:
                 next_non_terminal = 1.0 - dones[t]
                 next_values = 0
+            # Otherwise, the next non-terminal is 1 - 'dones[t + 1]', and the next value is 'values[t + 1]'
             else:
                 next_non_terminal = 1.0 - dones[t + 1]
                 next_values = values[t + 1]
+            # Calculate the Temporal Difference (TD) error
             delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
+            # Update the advantages and the last GAE lambda
             last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            # Update the advantages and the discounted returns
             advantages[t] = last_gae_lam
+            # Calculate the discounted return
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
@@ -736,8 +740,8 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
     workers_completed.value += 1
     print(f"Worker {multiprocessing.current_process().name} has completed all tasks.")
 
-    # If all workers have completed their tasks, signal the main process
-    if workers_completed.value == max_episodes_per_worker:
+    # If any workers have completed their tasks, signal the main process to finish
+    if workers_completed.value >= 1:
         workers_completed_signal.set()
 
 # TODO add description
@@ -953,12 +957,12 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": None},
         {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        {"variable": ("sin_time_1D", ""), "edit": None},
-        {"variable": ("cos_time_1D", ""), "edit": None},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        #{"variable": ("sin_time_1D", ""), "edit": None},
+        #{"variable": ("cos_time_1D", ""), "edit": None},
+        #{"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        #{"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -981,7 +985,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 600  # need to be divisible by num_workers
+    num_episodes = 400  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -1004,7 +1008,7 @@ if __name__ == '__main__':
     backtest_results = {}
 
     # Create an instance of the agent
-    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
+    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.975,  # discount factor for future rewards
                                   alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
@@ -1020,14 +1024,6 @@ if __name__ == '__main__':
                                   lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
-    total_rewards = []
-    episode_durations = []
-    total_balances = []
-    probs_dfs = {}
-    balances_dfs = {}
-    '''
-    Parallelized training
-    '''
     # Environment settings
     env_settings = {
         'look_back': look_back,
@@ -1041,6 +1037,9 @@ if __name__ == '__main__':
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
+
+    probs_dfs = {}
+    balances_dfs = {}
 
     # Collecting and learning data in parallel
     total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=5)
