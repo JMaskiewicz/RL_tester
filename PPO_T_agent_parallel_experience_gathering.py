@@ -999,7 +999,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 1000  # need to be divisible by num_workers
+    num_episodes = 1600  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
