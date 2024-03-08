@@ -999,7 +999,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 400  # need to be divisible by num_workers
+    num_episodes = 1000  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -1025,7 +1025,7 @@ if __name__ == '__main__':
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.975,  # discount factor for future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
