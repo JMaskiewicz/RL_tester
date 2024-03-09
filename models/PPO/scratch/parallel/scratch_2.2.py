@@ -12,11 +12,12 @@ Transformer based PPO agent for trading version 4.1
 
 Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
-- but the backtesting and the generation of actions is slow ie "while not done:" in the learning function
+- higher number of epochs agent would less likely to take a neutral position
 
 Reward testing:
 - higher penalty for wrong actions this would make agent more likely to take a neutral position
 - higher number of epochs agent would less likely to take a neutral position
+- premium for holding position agent would less likely to change position
 """
 import cProfile
 import numpy as np
@@ -54,25 +55,31 @@ from functions.utilis import save_actor_critic_model
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
 """
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
-    reward = 0
-    reward_return = (current_close / previous_close - 1) * current_position * leverage
-    if previous_position != current_position:
-        provision_cost = provision * (abs(current_position) == 1)
+    if previous_close != 0 and current_close != 0:
+        log_return = math.log(current_close / previous_close)
+    else:
+        log_return = 0
+
+    reward = log_return * current_position * leverage
+
+    if reward < 0:
+        reward *= 2
+
+    # Calculate the cost of provision if the position has changed, and it's not neutral (0).
+    if current_position != previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 - provision) * 2
+    elif current_position == previous_position and abs(current_position) == 1:  # If the position is held premium is given
+        provision_cost = math.log(1 + provision)
     else:
         provision_cost = 0
 
-    if reward_return < 0:
-        reward_return = 2 * reward_return
+    # Apply the provision cost
+    reward += provision_cost
 
-    # if agent keep position he will get reward equal to provision cost
-    if previous_position == current_position and current_position != 0:
-        holdinng_premium = provision_cost
-    else:
-        holdinng_premium = 0
+    # Scale the reward to enhance its significance for the learning process
+    final_reward = reward * 100
 
-    reward += reward_return * 1000 - provision_cost * 10 + holdinng_premium * 10
-
-    return reward
+    return final_reward
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -138,21 +145,17 @@ class ActorNetwork(nn.Module):
                                                  batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 512
+        self.max_position_embeddings = 256
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 2048)
-        self.ln1 = nn.LayerNorm(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.ln2 = nn.LayerNorm(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.ln3 = nn.LayerNorm(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.ln4 = nn.LayerNorm(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.ln5 = nn.LayerNorm(128)
-        self.fc6 = nn.Linear(128, n_actions)
+        self.fc1 = nn.Linear(input_dims * 2, 512)
+        self.ln1 = nn.LayerNorm(512)
+        self.fc2 = nn.Linear(512, 256)
+        self.ln2 = nn.LayerNorm(256)
+        self.fc3 = nn.Linear(256, 256)
+        self.ln3 = nn.LayerNorm(256)
+        self.fc6 = nn.Linear(256, n_actions)
 
         self.relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -170,8 +173,6 @@ class ActorNetwork(nn.Module):
         x = self.relu(self.ln1(self.fc1(combined_features)))
         x = self.relu(self.ln2(self.fc2(x)))
         x = self.relu(self.ln3(self.fc3(x)))
-        x = self.relu(self.ln4(self.fc4(x)))
-        x = self.relu(self.ln5(self.fc5(x)))
         x = self.fc6(x)
 
         return self.softmax(x)
@@ -190,21 +191,17 @@ class CriticNetwork(nn.Module):
                                                  batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 512
+        self.max_position_embeddings = 256
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 2048)
-        self.ln1 = nn.LayerNorm(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.ln2 = nn.LayerNorm(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.ln3 = nn.LayerNorm(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.ln4 = nn.LayerNorm(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.ln5 = nn.LayerNorm(128)
-        self.fc6 = nn.Linear(128, 1)
+        self.fc1 = nn.Linear(input_dims * 2, 512)
+        self.ln1 = nn.LayerNorm(512)
+        self.fc2 = nn.Linear(512, 256)
+        self.ln2 = nn.LayerNorm(256)
+        self.fc3 = nn.Linear(256, 256)
+        self.ln3 = nn.LayerNorm(256)
+        self.fc6 = nn.Linear(256, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -220,8 +217,6 @@ class CriticNetwork(nn.Module):
         x = self.relu(self.ln1(self.fc1(combined_features)))
         x = self.relu(self.ln2(self.fc2(x)))
         x = self.relu(self.ln3(self.fc3(x)))
-        x = self.relu(self.ln4(self.fc4(x)))
-        x = self.relu(self.ln5(self.fc5(x)))
         x = self.fc6(x)
 
         return x
@@ -234,7 +229,6 @@ class Transformer_PPO_Agent:
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
         self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.gamma = gamma
         self.gamma = gamma  # Discount factor
         self.policy_clip = policy_clip  # PPO policy clipping parameter
         self.n_epochs = n_epochs  # Number of optimization epochs per batch
@@ -281,12 +275,12 @@ class Transformer_PPO_Agent:
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
             # Convert arrays to tensors and move to the device
-            state_arr = state_arr.clone().detach().to(self.device)
-            action_arr = action_arr.clone().detach().to(self.device)
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)
-            vals_arr = vals_arr.clone().detach().to(self.device)
-            reward_arr = reward_arr.clone().detach().to(self.device)
-            dones_arr = dones_arr.clone().detach().to(self.device)
+            state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
+            action_arr = action_arr.clone().detach().to(self.device)  # Actions
+            old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
+            vals_arr = vals_arr.clone().detach().to(self.device)  # State values
+            reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
+            dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
             static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
 
             # Compute advantages and discounted rewards
@@ -336,26 +330,35 @@ class Transformer_PPO_Agent:
 
         # Increment generation of the agent
         self.generation += 1
+
         # track the time it takes to learn
         end_time = time.time()
         episode_time = end_time - start_time
+
         # print the time it takes to learn
         print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 50)
 
 
-    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns,
-                       batch_static_states):
+    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
+                       batch_returns, batch_static_states):
+        # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
         if batch_states.dim() == 2:
             batch_states = batch_states.unsqueeze(1)
 
         # Actor loss calculations
         new_probs = self.actor(batch_states, batch_static_states)
+        # Calculate the probability ratio and the surrogate loss
         dist = torch.distributions.Categorical(new_probs)
+        # Calculate the log probability of the action in the distribution
         new_log_probs = dist.log_prob(batch_actions)
+        # Calculate the probability ratio
         prob_ratios = torch.exp(new_log_probs - batch_old_probs)
+        # Calculate the surrogate loss
         surr1 = prob_ratios * batch_advantages
+        # Clipped surrogate loss
         surr2 = torch.clamp(prob_ratios, 1.0 - self.policy_clip, 1.0 + self.policy_clip) * batch_advantages
+        # Actor loss
         actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * dist.entropy().mean()
 
         # Critic loss calculations
@@ -365,24 +368,33 @@ class Transformer_PPO_Agent:
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
     def compute_discounted_rewards(self, rewards, values, dones):
+        # Calculate advantages and discounted returns
         n = len(rewards)
+        # Create tensors to store advantages and discounted returns
         discounted_rewards = torch.zeros_like(rewards)
         advantages = torch.zeros_like(rewards)
+        # Initialize the advantage and the last GAE (Generalized Advantage Estimation) lambda
         last_gae_lam = 0
 
         # Convert 'dones' to a float tensor
         dones = dones.float()
 
         for t in reversed(range(n)):
+            # If the current time step is the last one, the next non-terminal is 0
             if t == n - 1:
                 next_non_terminal = 1.0 - dones[t]
                 next_values = 0
+            # Otherwise, the next non-terminal is 1 - 'dones[t + 1]', and the next value is 'values[t + 1]'
             else:
                 next_non_terminal = 1.0 - dones[t + 1]
                 next_values = values[t + 1]
+            # Calculate the Temporal Difference (TD) error
             delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
+            # Update the advantages and the last GAE lambda
             last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            # Update the advantages and the discounted returns
             advantages[t] = last_gae_lam
+            # Calculate the discounted return
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
@@ -473,19 +485,20 @@ class Trading_Environment_Basic(gym.Env):
     def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001,
                  initial_balance=10000, leverage=1):
         super(Trading_Environment_Basic, self).__init__()
-        self.df = df.reset_index(drop=True)
-        self.look_back = look_back
-        self.initial_balance = initial_balance
-        self.reward_sum = 0
+        self.df = df.reset_index(drop=True)  # Reset the index of the DataFrame
+        self.look_back = look_back  # Number of time steps to look back
+        self.initial_balance = initial_balance  # Initial balance
+        self.reward_sum = 0  # Initialize the reward sum
         self.current_position = 0  # This is a static part of the state
-        self.variables = variables
-        self.tradable_markets = tradable_markets
-        self.provision = provision
-        self.leverage = leverage
+        self.variables = variables  # List of variables to be used in the environment
+        self.tradable_markets = tradable_markets  # asset to be traded in the environment
+        self.provision = provision  # Provision cost
+        self.leverage = leverage  # Leverage
 
         # Define action space: 0 (sell), 1 (hold), 2 (buy)
         self.action_space = spaces.Discrete(3)
 
+        # Reset the environment to initialize the state
         self.reset()
 
     def calculate_input_dims(self):
@@ -494,19 +507,26 @@ class Trading_Environment_Basic(gym.Env):
         return input_dims
 
     def reset(self, observation_idx=None, reset_position=True):
+        # Reset the environment to the initial state
         if observation_idx is not None:
             self.current_step = observation_idx + self.look_back
         else:
             self.current_step = self.look_back
 
+        # Reset the balance and reward sum
         self.balance = self.initial_balance
         self.reward_sum = 0
+
+        # Reset the current position
         if reset_position:
             self.current_position = 0
+
+        # Set the done flag to False
         self.done = False
         return self._next_observation()
 
     def _next_observation(self):
+        # Get the observation array for the current time step
         start = max(self.current_step - self.look_back, 0)
         end = self.current_step
 
@@ -519,13 +539,13 @@ class Trading_Environment_Basic(gym.Env):
             future_to_variable = {executor.submit(process_variable, data, edit_type): (data, edit_type) for data, edit_type in tasks}
             results = []
             for future in concurrent.futures.as_completed(future_to_variable):
-                data, edit_type = future_to_variable[future]
+                data, edit_type = future_to_variable[future]  # Get the original data and edit type
                 try:
-                    result = future.result()
+                    result = future.result()  # Get the result of the transformation
                 except Exception as exc:
-                    print('%r generated an exception: %s' % ((data, edit_type), exc))
+                    print('%r generated an exception: %s' % ((data, edit_type), exc))  # Print exception
                 else:
-                    results.append(result)
+                    results.append(result)  # Append the result to the list of results
 
         # Concatenate results to form the scaled observation array
         scaled_observation = np.concatenate(results).flatten()
@@ -533,25 +553,31 @@ class Trading_Environment_Basic(gym.Env):
 
     def step(self, action):  # TODO: Check if this is correct
         action_mapping = {0: -1, 1: 0, 2: 1}  # best mapping ever :)
-        mapped_action = action_mapping[action]
+        mapped_action = action_mapping[action]  # Map the action to a position change
 
+        # Get the current price and the price of the next time step for the reward calculation and PnL
         current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
         next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
         # balance update
         market_return = next_price / current_price - 1
+
+        # Provision cost calculation if the position has changed
         if mapped_action != self.current_position:
             provision_cost = self.provision * (abs(mapped_action) == 1)
         else:
             provision_cost = 0
 
+        # Update the balance
         self.balance *= (1 + market_return * self.current_position * self.leverage - provision_cost)
 
         # reward calculation
         final_reward = reward_calculation(current_price, next_price, self.current_position, mapped_action, self.leverage, self.provision)
-        self.reward_sum += final_reward
-        self.current_position = mapped_action
-        self.current_step += 1
+        self.reward_sum += final_reward  # Update the reward sum
+        self.current_position = mapped_action  # Update the current position
+        self.current_step += 1  # Increment the current step
+
+        # Check if the episode is done
         self.done = self.current_step >= len(self.df) - 1
 
         return self._next_observation(), final_reward, self.done, {}
@@ -578,7 +604,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     with torch.no_grad():
         # Create a backtesting environment
         env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
-                                        tradable_markets=tradable_markets, provision=provision,
+                                        tradable_markets=mkf, provision=provision,
                                         initial_balance=starting_balance, leverage=leverage)
 
         observation = env.reset()
@@ -599,8 +625,8 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
             best_action_list.append(best_action-1)
 
     # KPI Calculations
-    buy_and_hold_return = starting_balance * (df[('Close', tradable_markets)].iloc[-1] / df[('Close', tradable_markets)].iloc[look_back] - 1)
-    sell_and_hold_return = starting_balance * (1 - df[('Close', tradable_markets)].iloc[-1] / df[('Close', tradable_markets)].iloc[look_back])
+    buy_and_hold_return = starting_balance * (df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back] - 1)
+    sell_and_hold_return = starting_balance * (1 - df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back])
 
     returns = pd.Series(balances).pct_change().dropna()
     sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
@@ -626,8 +652,7 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
 
     return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
-def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
-                        Trading_Environment_Basic=None):
+def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None):
     """
     # TODO add description
     AC - Actor Critic
@@ -719,12 +744,13 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
     workers_completed.value += 1
     print(f"Worker {multiprocessing.current_process().name} has completed all tasks.")
 
-    # If all workers have completed their tasks, signal the main process
-    if workers_completed.value == max_episodes_per_worker:
+    # If any workers have completed their tasks, signal the main process to finish
+    if workers_completed.value >= 1:
         workers_completed_signal.set()
 
-
-def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent, num_workers, num_workers_backtesting):
+# TODO add description
+# TODO add early stopping based on the validation set from the backtesting
+def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=1):
     manager = Manager()
     total_rewards = manager.list()
     total_balances = manager.list()
@@ -775,10 +801,14 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
             bar = '█' * filled_length + '-' * (bar_length - filled_length)
             elapsed_time = time.time() - start_time
             speed = current_episodes / elapsed_time if elapsed_time > 0 else float('inf')
-            eta = ((total_episodes - current_episodes) / speed) if speed > 0 else float('inf')
+            eta_seconds = ((total_episodes - current_episodes) / speed) if speed > 0 else float('inf')
+
+            # Convert seconds
+            formatted_elapsed_time = format_time(elapsed_time)
+            formatted_eta = format_time(eta_seconds)
 
             sys.stdout.write(
-                f"\033[92m\rProgress: {progress_percentage:.0f}% |{bar}| {current_episodes}/{total_episodes} [{elapsed_time:.2f}s < {eta:.2f}s, {speed:.2f}it/s]\033[0m")
+                f"\033[92m\rProgress: {progress_percentage:.0f}% |{bar}| {current_episodes}/{total_episodes} [Elapsed: {formatted_elapsed_time}, ETA: {formatted_eta}, Speed: {speed:.2f}it/s]\033[0m")
             sys.stdout.flush()
 
             # Check if all workers have finished
@@ -796,7 +826,7 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
                 for resume_signal in resume_signals:
                     resume_signal.set()
 
-                if agent.generation > agent_generation and agent.generation % 5 == 0:
+                if agent.generation > agent_generation and agent.generation % backtesting_frequency == 0:
                     backtesting_completed.clear()
                     backtest_thread = Thread(target=backtest_in_background, args=(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed))
                     backtest_thread.start()
@@ -818,6 +848,13 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
         print(f"\033[92m\rProgress: 100% |{'█' * bar_length}| {max_episodes_per_worker}/{max_episodes_per_worker * num_workers} [{elapsed_time:.2f}s, {speed:.2f}it/s]\033[0m")
         print("All workers stopped.")
     return list(total_rewards), list(total_balances)
+
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h}h:{m}m:{s}s"
+
 
 def generate_index_labels(rolling_datasets, dataset_type):
     index_labels = []
@@ -910,12 +947,12 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'
-    validation_date = '2022-01-01'
-    test_date = '2023-01-01'
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2021-01-01'
+    test_date = '2022-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:]
+    df_test = df[test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "normalize"},
@@ -924,12 +961,12 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": None},
         {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        # {"variable": ("sin_time_1D", ""), "edit": None},
-        # {"variable": ("cos_time_1D", ""), "edit": None},
-        # {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        # {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        # {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        # {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        #{"variable": ("sin_time_1D", ""), "edit": None},
+        #{"variable": ("cos_time_1D", ""), "edit": None},
+        #{"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        #{"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -941,11 +978,11 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 8192  # 8192
-    epochs = 10  # 40
+    epochs = 20  # 40
     mini_batch_size = 256  # 256
     leverage = 10  # 30
-    l1_lambda = 1e-7  # L1 regularization
-    weight_decay = 0.00001  # L2 regularization
+    l1_lambda = 1e-6  # L1 regularization
+    weight_decay = 0.00005  # L2 regularization
 
     # Number of CPU cores for number of workers
     num_cores = multiprocessing.cpu_count()
@@ -975,10 +1012,10 @@ if __name__ == '__main__':
     backtest_results = {}
 
     # Create an instance of the agent
-    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
+    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.975,  # discount factor for future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.005,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -991,14 +1028,6 @@ if __name__ == '__main__':
                                   lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
-    total_rewards = []
-    episode_durations = []
-    total_balances = []
-    probs_dfs = {}
-    balances_dfs = {}
-    '''
-    Parallelized training
-    '''
     # Environment settings
     env_settings = {
         'look_back': look_back,
@@ -1013,8 +1042,11 @@ if __name__ == '__main__':
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
 
+    probs_dfs = {}
+    balances_dfs = {}
+
     # Collecting and learning data in parallel
-    total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting)
+    total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=3)
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(df)

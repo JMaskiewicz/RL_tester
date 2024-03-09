@@ -63,7 +63,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
     reward = log_return * current_position * leverage
 
     if reward < 0:
-        reward *= 2
+        reward *= 3
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -350,8 +350,8 @@ class Transformer_PPO_Agent:
         print("-" * 50)
 
 
-    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns,
-                       batch_static_states):
+    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
+                       batch_returns, batch_static_states):
         # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
         if batch_states.dim() == 2:
             batch_states = batch_states.unsqueeze(1)
@@ -988,7 +988,7 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 8192  # 8192
-    epochs = 10  # 40
+    epochs = 50  # 40
     mini_batch_size = 256  # 256
     leverage = 10  # 30
     l1_lambda = 1e-7  # L1 regularization
