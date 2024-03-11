@@ -72,7 +72,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
     if current_position != previous_position and abs(current_position) == 1:
         provision_cost = math.log(1 - provision) * 10  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 + provision)  # small premium for holding position
+        provision_cost = math.log(1 + provision) * 20  # small premium for holding position
     else:
         provision_cost = 0
 
@@ -657,17 +657,17 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     sell_and_hold_return = starting_balance * (1 - df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back])
 
     returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')
 
     cumulative_returns = (1 + returns).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
     drawdown = (cumulative_returns - peak) / peak
     max_drawdown = drawdown.min()
 
-    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)  # change 252
+    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)
     sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
 
-    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1  # change 252
+    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
@@ -775,6 +775,7 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
 
 # TODO add description
 # TODO add early stopping based on the validation set from the backtesting
+# todo batch_size_for_learning check
 def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
                       num_workers, num_workers_backtesting, backtesting_frequency=1):
 
@@ -800,9 +801,9 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
 
 def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency):
     agent_generation = 0
-    total_experiences = 0
-    start_time = time.time()
     try:
+        start_time = time.time()
+        total_experiences = 0
         while True:
             if not work_event.is_set():
                 work_event.set()
@@ -816,7 +817,7 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
                 print("\nLearning phase initiated.")
                 agent.learn()  # Placeholder for your agent's learning method
                 total_experiences = 0
-                # agent.memory.clear_memory() # Uncomment if your agent has a method to clear memory
+                agent.memory.clear_memory()
 
                 for signal in pause_signals:
                     signal.clear()
@@ -834,7 +835,7 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
             current_episodes = shared_episodes_counter.value
             total_episodes = max_episodes_per_worker * num_workers
             progress_percentage = (current_episodes / total_episodes) * 100
-            bar_length = 20
+            bar_length = 50
             filled_length = int(round(bar_length * progress_percentage / 100))
             bar = '█' * filled_length + '-' * (bar_length - filled_length)
             elapsed_time = time.time() - start_time
@@ -1000,7 +1001,7 @@ if __name__ == '__main__':
     ]
 
     tradable_markets = 'EURUSD'
-    window_size = '3M'
+    window_size = '1Y'
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
@@ -1008,8 +1009,8 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 1024  # 8192
-    epochs = 20  # 40
-    mini_batch_size = 128  # 256
+    epochs = 40  # 40
+    mini_batch_size = 64  # 256
     leverage = 10  # 30
     l1_lambda = 1e-7  # L1 regularization
     weight_decay = 0.00001  # L2 regularization
@@ -1018,8 +1019,8 @@ if __name__ == '__main__':
     num_cores = multiprocessing.cpu_count()
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
-    num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 40  # need to be divisible by num_workers
+    num_workers_backtesting = 8  # backtesting is parallelized in same time that gathering data for next generation
+    num_episodes = 1000  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
