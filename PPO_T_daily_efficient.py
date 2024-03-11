@@ -775,7 +775,6 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
 
 # TODO add description
 # TODO add early stopping based on the validation set from the backtesting
-# todo batch_size_for_learning check
 def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
                       num_workers, num_workers_backtesting, backtesting_frequency=1):
 
