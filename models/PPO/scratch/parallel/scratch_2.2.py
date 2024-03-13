@@ -69,7 +69,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
     if current_position != previous_position and abs(current_position) == 1:
         provision_cost = math.log(1 - provision) * 2
     elif current_position == previous_position and abs(current_position) == 1:  # If the position is held premium is given
-        provision_cost = math.log(1 + provision)
+        provision_cost = math.log(1 + provision) * 0
     else:
         provision_cost = 0
 
@@ -591,6 +591,9 @@ This approach ensures continuous data collection and efficient utilization of co
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
     """
     # TODO add description
+    # TODO calculate how much was spend on provision
+    #
+    AC - Actor Critic type of RL agent
     """
     action_probabilities_list = []
     best_action_list = []
@@ -989,7 +992,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 12  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 120  # need to be divisible by num_workers
+    num_episodes = 1600  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -1015,7 +1018,7 @@ if __name__ == '__main__':
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.975,  # discount factor for future rewards
-                                  alpha=0.005,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -1025,7 +1028,7 @@ if __name__ == '__main__':
                                   weight_decay=weight_decay,  # weight decay
                                   l1_lambda=l1_lambda,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.99,  # learning rate decay rate
+                                  lr_decay_rate=0.999,  # learning rate decay rate
                                   )
 
     # Environment settings

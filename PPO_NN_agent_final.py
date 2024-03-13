@@ -505,8 +505,8 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},  # should be effecting neutral position?
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        #{"variable": ("sin_time_1W", ""), "edit": None},  # should be effecting neutral position?
+        #{"variable": ("cos_time_1W", ""), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -523,8 +523,8 @@ if __name__ == '__main__':
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    reward_scaling = 100
-    num_episodes = 1000  # 100
+    reward_scaling = 1000
+    num_episodes = 200  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
     agent = PPO_Agent(n_actions=env.action_space.n,

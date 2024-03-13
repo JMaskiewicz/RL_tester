@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
@@ -293,7 +294,7 @@ class CriticNetwork(nn.Module):
         return x
 
 class Transformer_PPO_Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5, static_input_dims=1):
+    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024, n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.99):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma
@@ -303,6 +304,7 @@ class Transformer_PPO_Agent:
         self.mini_batch_size = mini_batch_size
         self.entropy_coefficient = entropy_coefficient
         self.l1_lambda = l1_lambda
+        self.lr_decay_rate = lr_decay_rate
 
         # Initialize the actor and critic networks with static input dimensions
         self.actor = ActorNetwork(n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
@@ -310,14 +312,19 @@ class Transformer_PPO_Agent:
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
+        self.actor_scheduler = ExponentialLR(self.actor_optimizer, gamma=self.lr_decay_rate)
+        self.critic_scheduler = ExponentialLR(self.critic_optimizer, gamma=self.lr_decay_rate)
+
         self.memory = PPOMemory(batch_size, self.device)
+
+        self.generation = 0
 
     def store_transition(self, state, action, probs, vals, reward, done, static_state):
         # Include static_state in the memory storage
         self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
 
     def learn(self):
-        print('Learning... CHECK')
+        start_time = time.time()
         self.actor.train()
         self.critic.train()
 
@@ -327,7 +334,7 @@ class Transformer_PPO_Agent:
             # Generating the data for the entire batch, including static states
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
-            # Convert arrays to tensors and move to the device # TODO try to parralize this could be worth in large batches size and large number of epochs
+            # Convert arrays to tensors and move to the device
             state_arr = state_arr.clone().detach().to(self.device)
             action_arr = action_arr.clone().detach().to(self.device)
             old_prob_arr = old_prob_arr.clone().detach().to(self.device)
@@ -354,13 +361,16 @@ class Transformer_PPO_Agent:
                 batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_advantages = advantages[minibatch_indices].clone().detach().to(self.device)
                 batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
-                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)  # Static states for the batch
+                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)
 
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
 
                 # Calculate actor and critic losses, include static states in forward passes
-                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns, batch_static_states)
+                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions,
+                                                                                       batch_old_probs,
+                                                                                       batch_advantages, batch_returns,
+                                                                                       batch_static_states)
 
                 # Perform backpropagation and optimization steps
                 actor_loss.backward()
@@ -369,8 +379,19 @@ class Transformer_PPO_Agent:
                 critic_loss.backward()
                 self.critic_optimizer.step()
 
+            # Decay learning rate
+            self.actor_scheduler.step()
+            self.critic_scheduler.step()
+
         # Clear memory after learning
         self.memory.clear_memory()
+
+        # Increment generation of the agent
+        self.generation += 1
+        end_time = time.time()
+        episode_time = end_time - start_time
+        print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
+
 
     def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns, batch_static_states):
         if batch_states.dim() == 2:
@@ -626,29 +647,31 @@ if __name__ == '__main__':
     provision = 0.001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 4096
-    epochs = 1  # 40
+    batch_size = 1024
+    epochs = 50  # 40
     mini_batch_size = 256
     leverage = 1
     weight_decay = 0.00001
     l1_lambda = 1e-7
     reward_scaling = 100
-    num_episodes = 1000  # 100
+    num_episodes = 10  # 100
     # Create the environment
     env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
-    agent = Transformer_PPO_Agent(n_actions=env.action_space.n,
-                                  input_dims=env.calculate_input_dims(),
-                                  gamma=0.9,
-                                  alpha=0.00005,  # learning rate for actor network
+    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
+                                  input_dims=len(variables) * look_back,  # input dimensions
+                                  gamma=0.9,  # discount factor for future rewards
+                                  alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.15,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
-                                  batch_size=batch_size,
-                                  n_epochs=epochs,
-                                  mini_batch_size=mini_batch_size,
-                                  weight_decay=weight_decay,
-                                  l1_lambda=l1_lambda,
-                                  static_input_dims=1)
+                                  batch_size=batch_size,  # size of the memory
+                                  n_epochs=epochs,  # number of epochs
+                                  mini_batch_size=mini_batch_size,  # size of the mini-batches
+                                  weight_decay=weight_decay,  # weight decay
+                                  l1_lambda=l1_lambda,  # L1 regularization lambda
+                                  static_input_dims=1,  # static input dimensions (current position)
+                                  lr_decay_rate=0.99,  # learning rate decay rate
+                                  )
 
     total_rewards = []
     episode_durations = []

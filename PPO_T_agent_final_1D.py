@@ -14,7 +14,8 @@ Some notes on the code:
 - but the backtesting and the generation of actions is slow ie "while not done:" in the learning function
 
 Reward testing:
-- higher penalty for wrong actions
+- higher penalty for wrong actions this would make agent more likely to take a neutral position
+- higher number of epochs agent would less likely to take a neutral position
 """
 import numpy as np
 import pandas as pd
@@ -54,9 +55,12 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     reward = log_return * current_position * leverage
 
-    # Calculate the cost of provision if the position has changed and it's not neutral (0).
+    if reward < 0:
+        reward *= 2
+
+    # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 - provision)
+        provision_cost = math.log(1 - provision) * 10
     else:
         provision_cost = 0
 
@@ -374,8 +378,7 @@ class Transformer_PPO_Agent:
                 batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_advantages = advantages[minibatch_indices].clone().detach().to(self.device)
                 batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
-                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(
-                    self.device)  # Static states for the batch
+                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)
 
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
@@ -668,7 +671,7 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 1024  # 8192
-    epochs = 10  # 40
+    epochs = 50  # 40
     mini_batch_size = 128
     leverage = 10
     weight_decay = 0.00001
@@ -678,9 +681,9 @@ if __name__ == '__main__':
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.9,  # discount factor for future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
-                                  policy_clip=0.15,  # clip parameter for PPO
+                                  policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
                                   batch_size=batch_size,  # size of the memory
                                   n_epochs=epochs,  # number of epochs

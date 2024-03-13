@@ -53,7 +53,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
         provision_cost = 0
 
     if reward_return < 0:
-        reward_return = 3 * reward_return
+        reward_return = 2 * reward_return
 
     reward += reward_return * 1000 - provision_cost * 10
 
@@ -611,6 +611,7 @@ class Trading_Environment_Basic(gym.Env):
         return self._next_observation(), final_reward, self.done, {}
 
 if __name__ == '__main__':
+    start_time_X = time.time()
     # Example usage
     # Stock market variables
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
@@ -672,12 +673,12 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 8192  # 8192
-    epochs = 10  # 40
+    epochs = 50  # 40
     mini_batch_size = 256
     leverage = 10
     weight_decay = 0.00001
     l1_lambda = 1e-7
-    num_episodes = 200  # 100
+    num_episodes = 16  # 100
     # Create the environment
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
@@ -829,4 +830,6 @@ if __name__ == '__main__':
     PnL_generation_plot(balances_dfs, port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)
 
-    print('end')
+    end_time_X = time.time()
+    episode_time_X = end_time_X - start_time_X
+    print(f"full run completed in {episode_time_X:.2f} seconds, END")
