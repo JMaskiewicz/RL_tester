@@ -43,6 +43,10 @@ import multiprocessing
 from multiprocessing import Process, Queue, Event, Manager
 from threading import Thread
 import sys
+import time
+from time import perf_counter, sleep
+from functools import wraps
+from typing import Callable, Any
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
@@ -66,13 +70,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 3
+        reward *= 2.5  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
         provision_cost = math.log(1 - provision) * 10  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 + provision) * 20  # small premium for holding position
+        provision_cost = math.log(1 + provision) * 1  # small premium for holding position
     else:
         provision_cost = 0
 
@@ -80,9 +84,22 @@ def reward_calculation(previous_close, current_close, previous_position, current
     reward += provision_cost
 
     # Scale the reward to enhance its significance for the learning process
-    final_reward = reward * 100
+    final_reward = reward * 1000
 
     return final_reward
+
+# decorator for timing functions # TODO move to a separate file
+def get_time(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(*args, **kwargs) -> Any:
+        start_time: float = perf_counter()
+        result: Any = func(*args, **kwargs)
+        end_time: float = perf_counter()
+
+        print(f'"{func.__name__}()" took {end_time - start_time:.3f} seconds to execute')
+        return result
+
+    return wrapper
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -687,6 +704,7 @@ def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial
     """
     return generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic)
 
+@get_time
 def backtest_in_background(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed):
     start_time = time.time()
     print("Starting backtesting...")
@@ -753,7 +771,7 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
             observation = observation_
 
             experiences_collected += 1  # Increment the counter for each experience collected
-
+            print('experiences_collected', experiences_collected)
             if experiences_collected >= individual_worker_batch_size:
                 end_time = time.time()  # Record the time when the batch size limit is reached
                 elapsed_time = end_time - start_time  # Calculate the elapsed time
@@ -762,6 +780,9 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
                 # Wait for the main process or a manager function to clear this worker's pause signal.
                 while pause_signal.is_set():
                     time.sleep(0.1)  # Sleep to prevent busy waiting
+
+            if workers_completed_signal.is_set():
+                break
 
         # Append the total reward and final balance for this episode to the shared lists
         total_rewards.append(env.reward_sum)
@@ -775,6 +796,7 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
 
 # TODO add description
 # TODO add early stopping based on the validation set from the backtesting
+@get_time
 def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
                       num_workers, num_workers_backtesting, backtesting_frequency=1):
 
@@ -811,6 +833,7 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
                 experience = shared_queue.get_nowait()
                 agent.store_transition(*experience)
                 total_experiences += 1
+                print('EXP ', total_experiences)
 
             if total_experiences >= batch_size_for_learning and backtesting_completed.is_set():
                 print("\nLearning phase initiated.")
@@ -849,13 +872,15 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
             if workers_completed_signal.is_set():
                 backtesting_completed.wait()
                 break
+
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
 
     # Final progress update after loop completion or interruption
     print("\r" + " " * 100, end='')  # Clear the line
-    print(f"\033[92m\rProgress: 100% |{'█' * bar_length}| {max_episodes_per_worker}/{max_episodes_per_worker * num_workers} [{elapsed_time:.2f}s, {speed:.2f}it/s]\033[0m")
+    print(f"\033[92m\rProgress: 100% |{'█' * bar_length}| {max_episodes_per_worker * num_workers}/{max_episodes_per_worker * num_workers} [{elapsed_time:.2f}s, {speed:.2f}it/s]\033[0m")
     print("All workers stopped.")
+    return None
 
 def setup_shared_resources_and_events(manager, num_workers):
     total_rewards = manager.list()
@@ -1019,12 +1044,12 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 8  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 1000  # need to be divisible by num_workers
+    num_episodes = 800  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
     Number of workers need to be related to window sizes to have best performance
-    Backtesting is bottleneck now maybe its better to backtest only each 10th generation
+    Backtesting is bottleneck now maybe its better to backtest only each 5th generation
     '''
 
     # Split validation and test datasets into multiple rolling windows
