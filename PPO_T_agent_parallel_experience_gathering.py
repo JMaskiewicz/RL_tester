@@ -753,7 +753,7 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
     # Safely increment workers_completed value
     workers_completed.value += 1
     print(f"Worker {multiprocessing.current_process().name} has completed all tasks.")
-
+    # TODO THIS ISNT WORKING ????
     # If any workers have completed their tasks, signal the main process to finish
     if workers_completed.value >= 1:
         workers_completed_signal.set()
