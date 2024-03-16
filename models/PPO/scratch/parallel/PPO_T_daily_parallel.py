@@ -47,6 +47,8 @@ import time
 from time import perf_counter, sleep
 from functools import wraps
 from typing import Callable, Any
+from numba import jit
+import math
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
@@ -58,6 +60,7 @@ from functions.utilis import save_actor_critic_model
 """
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
 """
+@jit(nopython=True)
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
     # Calculate the log return
     if previous_close != 0 and current_close != 0:
@@ -84,22 +87,9 @@ def reward_calculation(previous_close, current_close, previous_position, current
     reward += provision_cost
 
     # Scale the reward to enhance its significance for the learning process
-    final_reward = reward * 1000
+    final_reward = reward * 100
 
     return final_reward
-
-# decorator for timing functions # TODO move to a separate file
-def get_time(func: Callable) -> Callable:
-    @wraps(func)
-    def wrapper(*args, **kwargs) -> Any:
-        start_time: float = perf_counter()
-        result: Any = func(*args, **kwargs)
-        end_time: float = perf_counter()
-
-        print(f'"{func.__name__}()" took {end_time - start_time:.3f} seconds to execute')
-        return result
-
-    return wrapper
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -153,7 +143,7 @@ class PPOMemory:
 
 
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 8, static_input_dims=1):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
         super(ActorNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -165,21 +155,15 @@ class ActorNetwork(nn.Module):
                                                  batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 512
+        self.max_position_embeddings = 128
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 2048)
-        self.ln1 = nn.LayerNorm(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.ln2 = nn.LayerNorm(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.ln3 = nn.LayerNorm(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.ln4 = nn.LayerNorm(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.ln5 = nn.LayerNorm(128)
-        self.fc6 = nn.Linear(128, n_actions)
+        self.fc1 = nn.Linear(input_dims * 2, 256)
+        self.ln1 = nn.LayerNorm(256)
+        self.fc2 = nn.Linear(256, 128)
+        self.ln2 = nn.LayerNorm(128)
+        self.fc3 = nn.Linear(128, n_actions)
 
         self.relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -194,18 +178,15 @@ class ActorNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.ln1(self.fc1(combined_features)))
-        x = self.relu(self.ln2(self.fc2(x)))
-        x = self.relu(self.ln3(self.fc3(x)))
-        x = self.relu(self.ln4(self.fc4(x)))
-        x = self.relu(self.ln5(self.fc5(x)))
-        x = self.fc6(x)
+        x = self.relu(self.fc1(combined_features))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
 
         return self.softmax(x)
 
 
 class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 8, static_input_dims=1):
+    def __init__(self, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
         super(CriticNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -217,21 +198,15 @@ class CriticNetwork(nn.Module):
                                                  batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 512
+        self.max_position_embeddings = 128
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 2048)
-        self.ln1 = nn.LayerNorm(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.ln2 = nn.LayerNorm(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.ln3 = nn.LayerNorm(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.ln4 = nn.LayerNorm(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.ln5 = nn.LayerNorm(128)
-        self.fc6 = nn.Linear(128, 1)
+        self.fc1 = nn.Linear(input_dims * 2, 256)
+        self.ln1 = nn.LayerNorm(256)
+        self.fc2 = nn.Linear(256, 128)
+        self.ln2 = nn.LayerNorm(128)
+        self.fc3 = nn.Linear(128, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -244,12 +219,9 @@ class CriticNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.ln1(self.fc1(combined_features)))
-        x = self.relu(self.ln2(self.fc2(x)))
-        x = self.relu(self.ln3(self.fc3(x)))
-        x = self.relu(self.ln4(self.fc4(x)))
-        x = self.relu(self.ln5(self.fc5(x)))
-        x = self.fc6(x)
+        x = self.relu(self.fc1(combined_features))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
 
         return x
 
@@ -371,7 +343,7 @@ class Transformer_PPO_Agent:
         print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 50)
 
-
+    @jit(nopython=True)
     def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
                        batch_returns, batch_static_states):
         # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
@@ -405,6 +377,7 @@ class Transformer_PPO_Agent:
 
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
+    @jit(nopython=True)
     def compute_discounted_rewards(self, rewards, values, dones):
         # Calculate advantages and discounted returns
         n = len(rewards)
@@ -632,6 +605,104 @@ Description of parallelization of the environment
 Initiate the learning phase as soon as enough experiences are collected, then immediately resume experience gathering after learning while backtesting is performed in parallel for the updated agent. 
 This approach ensures continuous data collection and efficient utilization of computational resources.
 """
+def get_time(func: Callable) -> Callable:
+    @wraps(func)
+    def wrapper(*args, **kwargs) -> Any:
+        start_time: float = perf_counter()
+        result: Any = func(*args, **kwargs)
+        end_time: float = perf_counter()
+
+        print(f'"{func.__name__}()" took {end_time - start_time:.3f} seconds to execute')
+        return result
+
+    return wrapper
+
+def print_signal_status(arg1=None, **kwargs):
+    def print_status(signals):
+        print(f"Status of Signals:")
+        for key, value in signals.items():
+            if isinstance(value, list):
+                for i, signal in enumerate(value, start=1):
+                    status = 'Set' if signal.is_set() else 'Not Set'
+                    print(f"{key} {i}: {status}")
+            else:
+                status = 'Set' if value.is_set() else 'Not Set'
+                print(f"{key}: {status}")
+
+    if callable(arg1):
+        func = arg1
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            self = args[0]
+
+            print(f"Status of Signals after {func.__name__}:")
+            signals = {
+                'Work Event': self.work_event,
+                'Pause Signals': self.pause_signals,
+                'Resume Signals': self.resume_signals,
+                'Backtesting Completed': self.backtesting_completed,
+            }
+            print_status(signals)
+            return result
+
+        return wrapper
+    else:
+        print_status(arg1 or kwargs)
+
+def progress_update(interval=60):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            # Dynamically retrieve arguments based on function signature
+            arg_names = func.__code__.co_varnames[:func.__code__.co_argcount]
+            arg_dict = dict(zip(arg_names, args))
+            arg_dict.update(kwargs)
+
+            # Ensure required arguments are present
+            required_args = ['shared_episodes_counter', 'max_episodes_per_worker', 'num_workers']
+            missing_args = [arg for arg in required_args if arg not in arg_dict]
+            if missing_args:
+                raise ValueError(f"Missing required argument(s): {', '.join(missing_args)}")
+
+            def progress_updater(stop_event, shared_episodes_counter, max_episodes_per_worker, num_workers):
+                """Inner function to update the progress based on shared counter and total episodes."""
+                start_time = time.time()
+                while not stop_event.is_set():
+                    current_episodes = shared_episodes_counter.value
+                    total_episodes = max_episodes_per_worker * num_workers
+                    progress_percentage = (current_episodes / total_episodes) * 100
+                    bar_length = 50
+                    filled_length = int(round(bar_length * progress_percentage / 100))
+                    bar = '█' * filled_length + '-' * (bar_length - filled_length)
+                    elapsed_time = time.time() - start_time
+                    speed = current_episodes / elapsed_time if elapsed_time > 0 else 0
+                    eta_seconds = ((total_episodes - current_episodes) / speed) if speed > 0 else 0
+                    formatted_elapsed_time = format_time(elapsed_time)
+                    formatted_eta = format_time(eta_seconds)
+                    sys.stdout.write(
+                        f"\033[92m\rProgress: {progress_percentage:.0f}% |{bar}| {current_episodes}/{total_episodes} [Elapsed: {formatted_elapsed_time}, ETA: {formatted_eta}, Speed: {speed:.2f}it/s]\033[0m")
+                    sys.stdout.flush()
+                    time.sleep(interval)
+
+            # Start the progress updater thread
+            stop_event = Event()
+            updater_thread = Thread(target=progress_updater, args=(
+                stop_event,
+                arg_dict['shared_episodes_counter'],
+                arg_dict['max_episodes_per_worker'],
+                arg_dict['num_workers']
+            ))
+            updater_thread.start()
+
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                stop_event.set()
+                updater_thread.join()
+            return result
+
+        return wrapper
+    return decorator
 
 def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
     """
@@ -705,6 +776,7 @@ def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial
     return generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic)
 
 @get_time
+#@print_signal_status
 def backtest_in_background(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed):
     start_time = time.time()
     print("Starting backtesting...")
@@ -743,6 +815,7 @@ def backtest_in_background(agent, backtest_results, num_workers_backtesting, val
     episode_time = end_time - start_time
     print(f"Backtesting completed in {episode_time:.2f} seconds\n")
 
+
 def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signal, resume_signal, total_rewards, total_balances, worker_id, individual_worker_batch_size, workers_completed, workers_completed_signal, shared_episodes_counter):
     random.seed(worker_id)  # Seed the random number generator with a unique seed for this worker
 
@@ -771,15 +844,14 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
             observation = observation_
 
             experiences_collected += 1  # Increment the counter for each experience collected
-            #print('experiences_collected', experiences_collected)
             if experiences_collected >= individual_worker_batch_size:
                 end_time = time.time()  # Record the time when the batch size limit is reached
                 elapsed_time = end_time - start_time  # Calculate the elapsed time
                 print(f"Worker {multiprocessing.current_process().name}: Reached individual batch size limit in {elapsed_time:.2f} seconds.")
-                pause_signal.set()  # Signal this worker to pause
-                # Wait for the main process or a manager function to clear this worker's pause signal.
+                pause_signal.set()
+                # print_signal_status({'Pause Signal': pause_signal, 'backtesting_completed': workers_completed_signal, 'Work Event': work_event, 'Resume Signal': resume_signal})
                 while pause_signal.is_set():
-                    time.sleep(0.1)  # Sleep to prevent busy waiting
+                    time.sleep(0.1)
 
             if workers_completed_signal.is_set():
                 break
@@ -796,6 +868,7 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
 
 # TODO add description
 # TODO add early stopping based on the validation set from the backtesting
+
 @get_time
 def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
                       num_workers, num_workers_backtesting, backtesting_frequency=1):
@@ -811,7 +884,7 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
     manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event,
                                     pause_signals, resume_signals, shared_queue, workers_completed_signal,
                                     shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning,
-                                    backtesting_frequency)
+                                    backtesting_frequency, max_episodes_per_worker, num_workers)
 
     for worker in workers:
         worker.join()
@@ -820,10 +893,11 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
     print("All workers stopped.")
     return list(total_rewards), list(total_balances)
 
-def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency):
+@get_time
+@progress_update(interval=10)
+def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4):
     agent_generation = 0
     try:
-        start_time = time.time()
         total_experiences = 0
         while True:
             if not work_event.is_set():
@@ -837,7 +911,7 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
 
             if total_experiences >= batch_size_for_learning and backtesting_completed.is_set():
                 print("\nLearning phase initiated.")
-                agent.learn()  # Placeholder for your agent's learning method
+                agent.learn()
                 total_experiences = 0
                 agent.memory.clear_memory()
 
@@ -853,32 +927,11 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
                     backtest_thread.start()
                     agent_generation = agent.generation
 
-            # Progress update is within the while loop to continuously update
-            current_episodes = shared_episodes_counter.value
-            total_episodes = max_episodes_per_worker * num_workers
-            progress_percentage = (current_episodes / total_episodes) * 100
-            bar_length = 50
-            filled_length = int(round(bar_length * progress_percentage / 100))
-            bar = '█' * filled_length + '-' * (bar_length - filled_length)
-            elapsed_time = time.time() - start_time
-            speed = current_episodes / elapsed_time if elapsed_time > 0 else float('inf')
-            eta_seconds = ((total_episodes - current_episodes) / speed) if speed > 0 else float('inf')
-            formatted_elapsed_time = format_time(elapsed_time)
-            formatted_eta = format_time(eta_seconds)
-            sys.stdout.write(
-                f"\033[92m\rProgress: {progress_percentage:.0f}% |{bar}| {current_episodes}/{total_episodes} [Elapsed: {formatted_elapsed_time}, ETA: {formatted_eta}, Speed: {speed:.2f}it/s]\033[0m")
-            sys.stdout.flush()
-
             if workers_completed_signal.is_set():
                 backtesting_completed.wait()
                 break
-
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
-
-    # Final progress update after loop completion or interruption
-    print("\r" + " " * 100, end='')  # Clear the line
-    print(f"\033[92m\rProgress: 100% |{'█' * bar_length}| {max_episodes_per_worker * num_workers}/{max_episodes_per_worker * num_workers} [{elapsed_time:.2f}s, {speed:.2f}it/s]\033[0m")
     print("All workers stopped.")
     return None
 
@@ -995,9 +1048,9 @@ if __name__ == '__main__':
     df['Returns_Close', 'EURJPY'] = (df['Returns_Close', 'EURJPY'])
     df['Returns_Close', 'GBPUSD'] = (df['Returns_Close', 'GBPUSD'])
 
-    add_time_sine_cosine(df, '1D')
-    df[("sin_time_1D", "")] = df[("sin_time_1D", "")] / 2 + 0.5
-    df[("cos_time_1D", "")] = df[("cos_time_1D", "")] / 2 + 0.5
+    add_time_sine_cosine(df, '1W')
+    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
     df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     df = df.dropna()
@@ -1010,14 +1063,14 @@ if __name__ == '__main__':
     df_test = df[test_date:'2023-01-01']
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": None},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
-        #{"variable": ("sin_time_1D", ""), "edit": None},
-        #{"variable": ("cos_time_1D", ""), "edit": None},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        {"variable": ("sin_time_1W", ""), "edit": None},
+        {"variable": ("cos_time_1W", ""), "edit": None},
         #{"variable": ("Returns_Close", "EURUSD"), "edit": None},
         #{"variable": ("Returns_Close", "USDJPY"), "edit": None},
         #{"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -1033,18 +1086,18 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 1024  # 8192
-    epochs = 40  # 40
+    epochs = 10  # 40
     mini_batch_size = 64  # 256
     leverage = 10  # 30
     l1_lambda = 1e-7  # L1 regularization
-    weight_decay = 0.00001  # L2 regularization
+    weight_decay = 0.000001  # L2 regularization
 
     # Number of CPU cores for number of workers
     num_cores = multiprocessing.cpu_count()
     print(f"Number of CPU cores: {num_cores}")
-    num_workers = min(max(1, num_cores - 1), 8)  # Number of workers, some needs to left for backtesting
+    num_workers = min(max(1, num_cores - 1), 4)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 8  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 800  # need to be divisible by num_workers
+    num_episodes = 4000  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -1063,14 +1116,13 @@ if __name__ == '__main__':
     all_labels = val_labels + test_labels
 
     # Create a DataFrame to hold backtesting results for all rolling windows
-    columns = ['Agent generation', 'Label', 'Final Balance', 'Number of Trades']
     backtest_results = {}
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.975,  # discount factor for future rewards
-                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
+                                  gamma=0.9,  # discount factor for future rewards
+                                  alpha=0.00075,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.2,  # clip parameter for PPO
                                   entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
@@ -1080,7 +1132,7 @@ if __name__ == '__main__':
                                   weight_decay=weight_decay,  # weight decay
                                   l1_lambda=l1_lambda,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.99,  # learning rate decay rate
+                                  lr_decay_rate=0.999,  # learning rate decay rate
                                   )
 
     # Environment settings
