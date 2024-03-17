@@ -1,15 +1,29 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
-def plot_total_rewards(total_rewards, model_name=None):
+def plot_total_rewards(total_rewards, model_name=None, window_size=50):
     """
-    #TODO add description
+    Plots the total rewards over episodes, along with a moving average of the rewards.
+
+    Parameters:
+    - total_rewards (list of int/float): List of total rewards per episode.
+    - model_name (str, optional): Name of the model. Used in the plot title. Defaults to None.
+    - window_size (int, optional): Size of the window for calculating the moving average. Defaults to 10.
+
+    The function plots the original total rewards per episode and overlays a line representing the moving average of these rewards to highlight trends.
     """
-    plt.plot(total_rewards)
+    plt.figure(figsize=(10, 6))
+    plt.plot(total_rewards, label='Total Rewards')
+
+    # Calculate and plot moving average
+    moving_avg = np.convolve(total_rewards, np.ones(window_size) / window_size, mode='valid')
+    plt.plot(np.arange(window_size - 1, len(total_rewards)), moving_avg, color='red', label='Moving Average')
+
     plt.title('Total Reward Over Episodes - ' + model_name if model_name else 'Total Reward Over Episodes')
     plt.xlabel('Episode')
     plt.ylabel('Total Reward')
+    plt.legend()
     plt.show()
-
 
 def plot_episode_durations(episode_durations, model_name=None):
     """
