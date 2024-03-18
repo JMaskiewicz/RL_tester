@@ -272,7 +272,7 @@ class Transformer_PPO_Agent:
     def learn(self):
         # track the time it takes to learn
         start_time = time.time()
-        print("-" * 100)
+        print('\n', "-" * 100)
         # Set the actor and critic networks to training mode
         self.actor.train()
         self.critic.train()
@@ -350,7 +350,7 @@ class Transformer_PPO_Agent:
         episode_time = end_time - start_time
 
         # print the time it takes to learn
-        print(f"\nLearning of agent generation {self.generation} completed in {episode_time} seconds")
+        print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 100)
 
     #@jit(nopython=True)

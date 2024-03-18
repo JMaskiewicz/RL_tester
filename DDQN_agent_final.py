@@ -1,12 +1,8 @@
 """
-DDQN 2.3
+DDQN 3.1
 
 # TODO LIST
-- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
-- Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
-- Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
-- Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
+- add function to save model
 
 """
 import numpy as np
@@ -46,7 +42,10 @@ torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
-# reward calculation is input for the environment class
+"""
+Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
+currently there is 
+"""
 @jit(nopython=True)
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
     # Calculate the log return
@@ -199,36 +198,43 @@ class DDQN_Agent:
     def learn(self):
         # track the time it takes to learn
         start_time = time.time()
-        print("-" * 100)
+        print('\n', "-" * 100)
         self.replace_target_network()
 
         # Set the policy network to training mode
         self.q_policy.train()
 
+        # Sample a mini-batch from the replay buffer
         states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
 
         for epoch in range(self.n_epochs):  # Loop over epochs
+            # Calculate the number of mini-batches
             num_mini_batches = max(self.batch_size // self.mini_batch_size, 1)
 
             for mini_batch in range(num_mini_batches):
+                # Calculate the start and end indices of the mini-batch
                 start = mini_batch * self.mini_batch_size
                 end = min((mini_batch + 1) * self.mini_batch_size, self.batch_size)
 
+                # Convert the mini-batch to tensors
                 mini_states = torch.tensor(states[start:end], dtype=torch.float).to(self.device)
                 mini_actions = torch.tensor(actions[start:end]).to(self.device)
                 mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
                 mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
                 mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
 
+                # Zero the gradients of the policy optimizer
                 self.policy_optimizer.zero_grad()
 
+                # Calculate the Q-values for the current and next states
                 q_pred = self.q_policy(mini_states).gather(1, mini_actions.unsqueeze(-1)).squeeze(-1)
                 q_next = self.q_target(mini_states_).detach()
                 q_eval = self.q_policy(mini_states_).detach()
 
+                # Calculate the maximum Q-values for the next states
                 max_actions = torch.argmax(q_eval, dim=1)
-                q_next[mini_dones] = 0.0
-                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
+                q_next[mini_dones] = 0.0  # Set the Q-values of the terminal states to 0
+                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)  # Bellman equation
 
                 # MSE loss
                 loss = F.mse_loss(q_pred, q_target)
@@ -237,6 +243,7 @@ class DDQN_Agent:
                 l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
                 total_loss = loss + self.l1_lambda * l1_penalty
 
+                # Backpropagate the loss
                 total_loss.backward()
                 self.policy_optimizer.step()
 
@@ -244,8 +251,8 @@ class DDQN_Agent:
         self.policy_scheduler.step()
         self.target_scheduler.step()
 
-        self.learn_step_counter += 1
-        self.decrement_epsilon()
+        self.learn_step_counter += 1  # Increment the learn step counter
+        self.decrement_epsilon()  # Decrement the exploration rate
 
         # Clear memory after learning
         self.memory.clear_memory()
@@ -258,23 +265,29 @@ class DDQN_Agent:
         episode_time = end_time - start_time
 
         # print the time it takes to learn
-        print(f"\nLearning of agent generation {self.generation} completed in {episode_time} seconds")
+        print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 100)
 
     @torch.no_grad()
     def choose_action(self, observation, current_position):
+        # Epsilon-greedy action selection
         if np.random.random() > self.epsilon:
             # Convert the observation to a numpy array if it's not already
             if not isinstance(observation, np.ndarray):
                 observation = np.array(observation)
+
             # Reshape the observation to (1, -1) which means 1 row and as many columns as necessary
             observation = observation.reshape(1, -1)
+
             # Convert the numpy array to a tensor
             state = torch.tensor(observation, dtype=torch.float).to(self.device)
+
             actions = self.q_policy(state)
             action = torch.argmax(actions).item()
+        # if the random number is less than epsilon, take a random action
         else:
             action = np.random.choice(self.action_space)
+
         return action
 
     @torch.no_grad()
@@ -288,8 +301,7 @@ class DDQN_Agent:
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
-        with torch.no_grad():
-            q_values = self.q_policy(state)
+        q_values = self.q_policy(state)
 
         return q_values.cpu().numpy()
 
@@ -317,9 +329,8 @@ class DDQN_Agent:
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
-        with torch.no_grad():
-            q_values = self.q_policy(state)
-            probabilities = F.softmax(q_values, dim=1).cpu().numpy()
+        q_values = self.q_policy(state)
+        probabilities = F.softmax(q_values, dim=1).cpu().numpy()
 
         return probabilities.flatten()
 
@@ -358,9 +369,6 @@ if __name__ == '__main__':
     add_returns(df, return_indicators)
 
     add_time_sine_cosine(df, '1W')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
@@ -400,10 +408,10 @@ if __name__ == '__main__':
     leverage = 10
     weight_decay = 0.000005
     l1_lambda = 0.0000005
-    num_episodes = 1000  # 100
+    num_episodes = 1500  # 100
     # Create the environment
 
-    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,
+    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
                        n_actions=3,
                        n_epochs=n_epochs,
                        mini_batch_size=mini_batch_size,
