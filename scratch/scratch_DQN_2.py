@@ -228,7 +228,7 @@ win_rate_test,  number_of_trades_test = calculate_win_rate(predicted_df_test, cu
 print(f"Win Rate test: {win_rate_test * 100:.2f}%")
 print(f"Number of trades test: {number_of_trades_test}")
 
-from backtest.backtest_functions.backtest import Strategy
+from backtest.backtest_functions.other.backtest import Strategy
 
 class SimpleDQN(Strategy):
     def __init__(self, currencies, agent, look_back, leverage=1.0, provision=0.0001, starting_capital=10000):

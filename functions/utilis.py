@@ -2,6 +2,61 @@ import subprocess
 import os
 import torch
 
+
+def generate_index_labels(rolling_datasets, dataset_type):
+    index_labels = []
+    for dataset in rolling_datasets:
+        last_day = dataset.index[-1].strftime('%Y-%m-%d')
+        label = f"{dataset_type}_{last_day}"
+        index_labels.append(label)
+    return index_labels
+
+def prepare_backtest_results(backtest_results):
+    agent_generations = []
+    labels = []
+    final_balances = []
+    total_rewards = []
+    number_of_trades = []
+    buy_and_hold_returns = []
+    sell_and_hold_returns = []
+    sharpe_ratios = []
+    max_drawdowns = []
+    sortino_ratios = []
+    calmar_ratios = []
+
+    # Iterating over each record in the dataset
+    for (agent_gen, label), metrics in backtest_results.items():
+        for metric in metrics:
+            agent_generations.append(agent_gen)
+            labels.append(label)
+            final_balances.append(metric['Final Balance'])
+            total_rewards.append(metric['Total Reward'])
+            number_of_trades.append(metric['Number of Trades'])
+            buy_and_hold_returns.append(metric['Buy and Hold Return'])
+            sell_and_hold_returns.append(metric['Sell and Hold Return'])
+            sharpe_ratios.append(metric['Sharpe Ratio'])
+            max_drawdowns.append(metric['Max Drawdown'])
+            sortino_ratios.append(metric['Sortino Ratio'])
+            calmar_ratios.append(metric['Calmar Ratio'])
+
+    # Creating a DataFrame from the lists
+    df = pd.DataFrame({
+        'Agent Generation': agent_generations,
+        'Label': labels,
+        'Final Balance': final_balances,
+        'Total Reward': total_rewards,
+        'Number of Trades': number_of_trades,
+        'Buy and Hold Return': buy_and_hold_returns,
+        'Sell and Hold Return': sell_and_hold_returns,
+        'Sharpe Ratio': sharpe_ratios,
+        'Max Drawdown': max_drawdowns,
+        'Sortino Ratio': sortino_ratios,
+        'Calmar Ratio': calmar_ratios,
+    })
+    return df
+
+
+
 def get_repository_root_path():
     try:
         # Run the git command to get the top-level directory

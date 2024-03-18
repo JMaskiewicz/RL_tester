@@ -22,31 +22,73 @@ import gym
 from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 import torch.nn.functional as F
+from numba import jit
+import math
+import multiprocessing
+from multiprocessing import Process, Queue, Event, Manager
+from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-from data.function.edit import normalize_data, standardize_data
+from data.function.edit import normalize_data, standardize_data, process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
+from functions.utilis import prepare_backtest_results, generate_index_labels
+
+# import environment class
+from trading_environment.environment import Trading_Environment_Basic
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
+# reward calculation is input for the environment class
+@jit(nopython=True)
+def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
+    # Calculate the log return
+    if previous_close != 0 and current_close != 0:
+        log_return = math.log(current_close / previous_close)
+    else:
+        log_return = 0
+
+    # Calculate the base reward
+    reward = log_return * current_position * leverage
+
+    # Penalize the agent for taking the wrong action
+    if reward < 0:
+        reward *= 3  # penalty for wrong action
+
+    # Calculate the cost of provision if the position has changed, and it's not neutral (0).
+    if current_position != previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 - provision) * 100  # penalty for changing position
+    elif current_position == previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 + provision) * 10  # small premium for holding position
+    else:
+        provision_cost = 0
+
+    # Apply the provision cost
+    reward += provision_cost
+
+    # Scale the reward to enhance its significance for the learning process
+    final_reward = reward * 100
+
+    return final_reward
+
 class DuelingQNetwork(nn.Module):
     def __init__(self, input_dims, n_actions, dropout_rate=1/8):
         super(DuelingQNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
+        self.fc1 = nn.Linear(input_dims, 512)
         self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(2048, 1024)
+        self.fc2 = nn.Linear(512, 512)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc_value = nn.Linear(1024, 512)
-        self.value = nn.Linear(512, 1)
-        self.fc_advantage = nn.Linear(1024, 512)
-        self.advantage = nn.Linear(512, n_actions)
+        self.fc_value = nn.Linear(512, 256)
+        self.value = nn.Linear(256, 1)
+        self.fc_advantage = nn.Linear(512, 256)
+        self.advantage = nn.Linear(256, n_actions)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
@@ -106,34 +148,43 @@ class ReplayBuffer:
 
 
 class DDQN_Agent:
-    def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005 , epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5):
+    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.epochs = epochs
-        self.mini_batch_size = mini_batch_size
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_dec = epsilon_dec
-        self.epsilon_min = epsilon_end
+        self.n_epochs = n_epochs  # Number of epochs
+        self.mini_batch_size = mini_batch_size  # Mini-batch size
+        self.gamma = gamma  # Discount factor
+        self.epsilon = epsilon   # Exploration rate
+        self.epsilon_dec = epsilon_dec  # Exploration rate decay
+        self.epsilon_min = epsilon_end  # Minimum exploration rate
+        self.mem_size = mem_size  # Memory size
+        self.batch_size = batch_size  # Batch size
+        self.replace_target_cnt = replace  # Replace target network count
+        self.learn_step_counter = 0  # Learn step counter
+        self.weight_decay = weight_decay  # Weight decay
+        self.l1_lambda = l1_lambda  # L1 regularization lambda
+        self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
         self.action_space = [i for i in range(n_actions)]
-        self.mem_size = mem_size
-        self.batch_size = batch_size
-        self.replace_target_cnt = replace
-        self.learn_step_counter = 0
-        self.weight_decay = weight_decay
-        self.l1_lambda = l1_lambda
 
+        # Memory
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
-        self.q_target.eval()
+        self.q_target.eval()  # Set the target network to evaluation mode
 
-        self.policy_lr = policy_alpha
-        self.target_lr = target_alpha
+        self.policy_lr = policy_alpha  # Policy learning rate
+        self.target_lr = target_alpha  # Target learning rate
         self.policy_optimizer = optim.Adam(self.q_policy.parameters(), lr=self.policy_lr, weight_decay=weight_decay)
         self.target_optimizer = optim.Adam(self.q_target.parameters(), lr=self.target_lr, weight_decay=weight_decay)
+
+        # track the generation of the agent
+        self.generation = 0
+
+        # Learning rate schedulers
+        self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
+        self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
     def store_transition(self, state, action, reward, state_, done):
         self.memory.store_transition(state, action, reward, state_, done)
@@ -146,10 +197,9 @@ class DDQN_Agent:
         self.epsilon = self.epsilon * self.epsilon_dec if self.epsilon > self.epsilon_min else self.epsilon_min
 
     def learn(self):
-        if self.memory.mem_cntr < self.batch_size:
-            return
-
-        print('Learning...')
+        # track the time it takes to learn
+        start_time = time.time()
+        print("-" * 100)
         self.replace_target_network()
 
         # Set the policy network to training mode
@@ -157,7 +207,7 @@ class DDQN_Agent:
 
         states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
 
-        for epoch in range(self.epochs):  # Loop over epochs
+        for epoch in range(self.n_epochs):  # Loop over epochs
             num_mini_batches = max(self.batch_size // self.mini_batch_size, 1)
 
             for mini_batch in range(num_mini_batches):
@@ -190,11 +240,29 @@ class DDQN_Agent:
                 total_loss.backward()
                 self.policy_optimizer.step()
 
+        # Decay learning rate
+        self.policy_scheduler.step()
+        self.target_scheduler.step()
+
         self.learn_step_counter += 1
-        print('Epsilon decreasing...')
         self.decrement_epsilon()
 
-    def choose_action(self, observation):
+        # Clear memory after learning
+        self.memory.clear_memory()
+
+        # Increment generation of the agent
+        self.generation += 1
+
+        # track the time it takes to learn
+        end_time = time.time()
+        episode_time = end_time - start_time
+
+        # print the time it takes to learn
+        print(f"\nLearning of agent generation {self.generation} completed in {episode_time} seconds")
+        print("-" * 100)
+
+    @torch.no_grad()
+    def choose_action(self, observation, current_position):
         if np.random.random() > self.epsilon:
             # Convert the observation to a numpy array if it's not already
             if not isinstance(observation, np.ndarray):
@@ -209,7 +277,8 @@ class DDQN_Agent:
             action = np.random.choice(self.action_space)
         return action
 
-    def get_action_q_values(self, observation):
+    @torch.no_grad()
+    def get_action_q_values(self, observation, current_position):
         """
         Returns the Q-values of each action for a given observation.
         """
@@ -224,7 +293,8 @@ class DDQN_Agent:
 
         return q_values.cpu().numpy()
 
-    def choose_best_action(self, observation):
+    @torch.no_grad()
+    def choose_best_action(self, observation, current_position):
         """
         Selects the best action based on the highest Q-value without exploration.
         """
@@ -235,14 +305,15 @@ class DDQN_Agent:
     def get_epsilon(self):
         return self.epsilon
 
-    def get_action_probabilities(self, observation):
+    @torch.no_grad()
+    def get_action_probabilities(self, observation, current_position):
         """
         Returns the probabilities of each action for a given observation.
         Converts Q values to a probability distribution using the softmax function.
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
-
+        observation = np.append(observation, current_position)
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
@@ -259,112 +330,14 @@ class DDQN_Agent:
         return self.__class__.__name__
 
 
-class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001, initial_balance=10000, leverage=1, reward_scaling=1):
-        super(Trading_Environment_Basic, self).__init__()
-        self.df = df.reset_index(drop=True)
-        self.look_back = look_back
-        self.initial_balance = initial_balance
-        self.current_position = 0
-        self.variables = variables
-        self.tradable_markets = tradable_markets
-        self.provision = provision
-        self.leverage = leverage
-        self.reward_scaling = reward_scaling
-
-        # Define action space: 0 (sell), 1 (hold), 2 (buy)
-        self.action_space = spaces.Discrete(3)
-
-        # Define observation space based on the look_back period and the number of variables
-        self.observation_space = spaces.Box(low=-np.inf,
-                                            high=np.inf,
-                                            shape=(look_back + 1,),  # +1 for current position
-                                            dtype=np.float32)
-
-        self.reset()
-
-    def calculate_input_dims(self):
-        num_variables = len(self.variables)  # Number of variables
-        input_dims = num_variables * self.look_back  # Variables times look_back
-        input_dims += 1  # Add one more dimension for current position
-        return input_dims
-
-    def reset(self, observation_idx=None, reset_position=True):
-        if observation_idx is not None:
-            self.current_step = observation_idx + self.look_back
-        else:
-            self.current_step = self.look_back
-
-        self.balance = self.initial_balance
-        if reset_position:
-            self.current_position = 0
-        self.done = False
-        return self._next_observation()
-
-    def _next_observation(self):
-        start = max(self.current_step - self.look_back, 0)
-        end = self.current_step
-
-        # Apply scaling based on 'edit' property of each variable
-        scaled_observation = []
-        for variable in self.variables:
-            data = self.df[variable['variable']].iloc[start:end].values
-            if variable['edit'] == 'standardize':
-                scaled_data = standardize_data(data)
-            elif variable['edit'] == 'normalize':
-                scaled_data = normalize_data(data)
-            else:  # Default none
-                scaled_data = data
-
-            scaled_observation.extend(scaled_data)
-
-        scaled_observation = np.append(scaled_observation, (self.current_position+1)/2)
-
-        return np.array(scaled_observation)
-
-    def step(self, action):
-        # Existing action mapping
-        action_mapping = {0: -1, 1: 0, 2: 1}
-        mapped_action = action_mapping[action]
-
-        # Get current and next price
-        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
-        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
-
-        # Calculate log return based on action
-        log_return = math.log(next_price / current_price) if current_price != 0 else 0
-        reward = log_return * mapped_action * self.leverage
-
-        # Calculate cost based on action and current position
-        if mapped_action != self.current_position:
-            if abs(mapped_action) == 1:
-                provision = math.log(1 - self.provision)
-            else:
-                provision = 0
-        else:
-            provision = 0
-
-        reward += provision
-
-        # Update the balance
-        self.balance *= math.exp(reward)  # Update balance using exponential of reward before applying other penalties
-
-        # Update current position and step
-        self.current_position = mapped_action
-        self.current_step += 1
-        """
-        multiple reward by X to make it more significant and to make it easier for the agent to learn, 
-        without this the agent would not learn as the reward is too close to 0
-        """
-
-        final_reward = reward * self.reward_scaling
-
-        # Check if the episode is done
-        self.done = self.current_step >= len(self.df) - 1
-
-        return self._next_observation(), final_reward, self.done, {}
-
 if __name__ == '__main__':
+    # time the execution
+    start_time_X = time.time()
+    # Set seeds for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
+
     # Example usage
     # Stock market variables
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
@@ -373,34 +346,44 @@ if __name__ == '__main__':
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
         {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
         {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"},]
+        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
+    return_indicators = [
+        {"price_type": "Close", "mkf": "EURUSD"},
+        {"price_type": "Close", "mkf": "USDJPY"},
+        {"price_type": "Close", "mkf": "EURJPY"},
+        {"price_type": "Close", "mkf": "GBPUSD"},
+    ]
     add_indicators(df, indicators)
+    add_returns(df, return_indicators)
+
     add_time_sine_cosine(df, '1W')
-    add_time_sine_cosine(df, '1M')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")]/2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")]/2 + 0.5
-    df[("sin_time_1M", "")] = df[("sin_time_1M", "")]/2 + 0.5
-    df[("cos_time_1M", "")] = df[("cos_time_1M", "")]/2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")]/100
+    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     df = df.dropna()
-    start_date = '2008-01-01'
-    validation_date = '2022-01-01'
-    test_date = '2023-01-01'
+    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2021-01-01'
+    test_date = '2022-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:]
+    df_test = df[test_date:'2023-01-01']
+
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "normalize"},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
         {"variable": ("sin_time_1W", ""), "edit": None},
         {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("sin_time_1M", ""), "edit": None},
-        {"variable": ("cos_time_1M", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -412,18 +395,17 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 1024
-    epochs = 1  # 40
-    mini_batch_size = 128
-    leverage = 1
-    weight_decay = 0.00005
-    l1_lambda = 0.000005
+    n_epochs = 20  # 40
+    mini_batch_size = 64
+    leverage = 10
+    weight_decay = 0.000005
+    l1_lambda = 0.0000005
     num_episodes = 1000  # 100
-    reward_scaling = 1000
     # Create the environment
-    env = Trading_Environment_Basic(df_train, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
-    agent = DDQN_Agent(input_dims=env.calculate_input_dims(),
-                       n_actions=env.action_space.n,
-                       epochs=epochs,
+
+    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,
+                       n_actions=3,
+                       n_epochs=n_epochs,
                        mini_batch_size=mini_batch_size,
                        policy_alpha=0.0005,
                        target_alpha=0.00005,
@@ -435,7 +417,8 @@ if __name__ == '__main__':
                        batch_size=batch_size,
                        replace=5,  # num_episodes // 4
                        weight_decay=weight_decay,
-                       l1_lambda=l1_lambda)
+                       l1_lambda=l1_lambda,
+                       lr_decay_rate=0.999)
 
     total_rewards = []
     episode_durations = []
@@ -446,9 +429,23 @@ if __name__ == '__main__':
     columns = ['Final Balance', 'Dataset Index']
     backtest_results = pd.DataFrame(index=index, columns=columns)
 
+    window_size_2 = '3M'
+    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
+    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
+
+    # Generate index labels for each rolling window dataset
+    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
+    test_labels = generate_index_labels(test_rolling_datasets, 'test')
+    all_labels = val_labels + test_labels
+
     # Rolling DF
-    rolling_datasets = rolling_window_datasets(df_train, window_size=window_size,  look_back=look_back)
+    rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
+
+    probs_dfs = {}
+    balances_dfs = {}
+    backtest_results = {}
+    generation = 0
 
     for episode in tqdm(range(num_episodes)):
         window_df = next(dataset_iterator)
@@ -456,17 +453,18 @@ if __name__ == '__main__':
 
         print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
         # Create a new environment with the randomly selected window's data
-        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_scaling=reward_scaling)
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
 
         observation = env.reset()
         done = False
         cumulative_reward = 0
         start_time = time.time()
         initial_balance = env.balance
-
+        observation = np.append(observation, 0)
         while not done:
-            action = agent.choose_action(observation)
+            action = agent.choose_action(observation, env.current_position)
             observation_, reward, done, info = env.step(action)
+            observation_ = np.append(observation_, env.current_position)
             agent.store_transition(observation, action, reward, observation_, done)
             observation = observation_
             cumulative_reward += reward
@@ -476,37 +474,41 @@ if __name__ == '__main__':
                 agent.learn()
                 agent.memory.clear_memory()
 
-        # Backtesting in parallel
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            validation_future = executor.submit(BF.backtest_wrapper_DQN, df_validation, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, reward_scaling=reward_scaling, Trading_Environment_Basic=Trading_Environment_Basic)
-            test_future = executor.submit(BF.backtest_wrapper_DQN, df_test, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, reward_scaling=reward_scaling, Trading_Environment_Basic=Trading_Environment_Basic)
+            if generation < agent.generation:
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+                        future = executor.submit(BF.backtest_wrapper, 'DQN', df, agent, 'EURUSD', look_back,
+                                                 variables, provision, starting_balance, leverage,
+                                                 Trading_Environment_Basic, reward_calculation)
+                        futures.append((future, label))
 
-            # Retrieve results
-            validation_balance, validation_total_rewards, validation_number_of_trades = validation_future.result()
-            test_balance, test_total_rewards, test_number_of_trades = test_future.result()
-
-        backtest_results.loc[(episode, 'validation'), 'Final Balance'] = validation_balance
-        backtest_results.loc[(episode, 'test'), 'Final Balance'] = test_balance
-        backtest_results.loc[(episode, 'validation'), 'Final Reward'] = validation_total_rewards
-        backtest_results.loc[(episode, 'test'), 'Final Reward'] = test_total_rewards
-        backtest_results.loc[(episode, 'validation'), 'Number of Trades'] = validation_number_of_trades
-        backtest_results.loc[(episode, 'test'), 'Number of Trades'] = test_number_of_trades
-        backtest_results.loc[(episode, 'validation'), 'Dataset Index'] = dataset_index
-        backtest_results.loc[(episode, 'test'), 'Dataset Index'] = dataset_index
-
-        # calculate probabilities
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            future_train = executor.submit(BF.calculate_probabilities_wrapper_DQN, df_train, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-            future_validation = executor.submit(BF.calculate_probabilities_wrapper_DQN, df_validation, Trading_Environment_Basic,agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-            future_test = executor.submit(BF.calculate_probabilities_wrapper_DQN, df_test, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage)
-
-            train_probs = future_train.result()
-            validation_probs = future_validation.result()
-            test_probs = future_test.result()
-
-        episode_probabilities['train'].append(train_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
-        episode_probabilities['validation'].append(validation_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
-        episode_probabilities['test'].append(test_probs[['Short', 'Neutral', 'Long']].to_dict(orient='list'))
+                    for future, label in futures:
+                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
+                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
+                         cumulative_returns, balances) = future.result()
+                        result_data = {
+                            'Agent generation': agent.generation,
+                            'Label': label,
+                            'Final Balance': balance,
+                            'Total Reward': total_reward,
+                            'Number of Trades': number_of_trades,
+                            'Buy and Hold Return': buy_and_hold_return,
+                            'Sell and Hold Return': sell_and_hold_return,
+                            'Sharpe Ratio': sharpe_ratio,
+                            'Max Drawdown': max_drawdown,
+                            'Sortino Ratio': sortino_ratio,
+                            'Calmar Ratio': calmar_ratio
+                        }
+                        key = (agent.generation, label)
+                        if key not in backtest_results:
+                            backtest_results[key] = []
+                        backtest_results[key].append(result_data)
+                        # Store probabilities and balances for plotting
+                        probs_dfs[(agent.generation, label)] = probs_df
+                        balances_dfs[(agent.generation, label)] = balances
+                    generation = agent.generation
+                    print(f"Backtesting completed for agent generation {generation}")
 
         # results
         end_time = time.time()
@@ -521,86 +523,18 @@ if __name__ == '__main__':
     #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
     #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
 
+    backtest_results = prepare_backtest_results(backtest_results)
+    backtest_results = backtest_results.set_index(['Agent Generation'])
     print(backtest_results)
 
-    # final prediction agent
-    # predictions and probabilities for train, validation and test calculated in parallel
-    from backtest.plots.plot import plot_all
-    from backtest.plots.OHLC_probability_plot import OHLC_probability_plot
+    from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
 
-    with ThreadPoolExecutor() as executor:
-        futures = []
-        datasets = [df_train, df_validation, df_test]
-        for df in datasets:
-            futures.append(executor.submit(BF.process_dataset_DQN, df, Trading_Environment_Basic, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage))
+    plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
+    plot_total_rewards(total_rewards, agent.get_name())
+    plot_total_balances(total_balances, agent.get_name())
 
-        results = [future.result() for future in futures]
-
-    # Unpack results
-    df_train_with_predictions, df_train_with_probabilities = results[0]
-    df_validation_with_predictions, df_validation_with_probabilities = results[1]
-    df_test_with_predictions, df_test_with_probabilities = results[2]
-
-    # Extracting data for plotting
-    validation_pnl = backtest_results.loc[(slice(None), 'validation'), 'Final Balance']
-    test_pnl = backtest_results.loc[(slice(None), 'test'), 'Final Balance']
-
-    # plotting everything
-    probabilities_sets = {
-        'Validation': df_validation_with_probabilities,
-        'Train': df_train_with_probabilities,
-        'Test': df_test_with_probabilities
-    }
-
-    plot_all(
-        total_rewards=total_rewards,
-        episode_durations=episode_durations,
-        total_balances=total_balances,
-        num_episodes=num_episodes,
-        validation_pnl=validation_pnl,
-        test_pnl=test_pnl,
-        probabilities_sets=probabilities_sets,
-        plot_rewards=True,
-        plot_durations=True,
-        plot_balances=True,
-        plot_pnl=True,
-        plot_probabilities=True,
-        model_name=agent.get_name(),
-    )
-
-    ###
-    OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilities, portnumber=8050)
-
-    # Prepare the example observation
-    observation_window = df_train.iloc[60:60+look_back]
-    processed_observation = []
-
-    for variable in variables:
-        data = observation_window[variable['variable']].values
-        if variable['edit'] == 'standardize':
-            processed_data = standardize_data(data)
-        elif variable['edit'] == 'normalize':
-            processed_data = normalize_data(data)
-        else:
-            processed_data = data
-        processed_observation.extend(processed_data)
-
-    # Convert to numpy array
-    processed_observation = np.array(processed_observation)
-
-    def get_probabilities_for_position(current_position):
-        observation_with_position = np.append(processed_observation, (current_position+1)/2)
-        observation_with_position = observation_with_position.reshape(1, -1)
-        return agent.get_action_probabilities(observation_with_position)
-
-    # Get probabilities for each position
-    probabilities_short = get_probabilities_for_position(-1)
-    probabilities_neutral = get_probabilities_for_position(0)
-    probabilities_long = get_probabilities_for_position(1)
-
-    # Print or return the results
-    print("Probabilities for Short Position:", probabilities_short)
-    print("Probabilities for Neutral Position:", probabilities_neutral)
-    print("Probabilities for Long Position:", probabilities_long)
+    PnL_generation_plot(balances_dfs, port_number=8050)
+    Probability_generation_plot(probs_dfs, port_number=8051)
 
     print('end')

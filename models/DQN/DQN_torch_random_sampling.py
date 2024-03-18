@@ -16,16 +16,13 @@ import warnings
 # Ignore all FutureWarnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-from data.function.load_data import load_data
-from technical_analysys.add_indicators import add_indicators, compute_volatility
-from backtest.backtest_functions.backtest import Strategy
+from backtest.backtest_functions.other.backtest import Strategy
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import random
-import matplotlib.pyplot as plt
 import time
 
 from data.function.load_data import load_data

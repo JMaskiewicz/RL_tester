@@ -551,7 +551,7 @@ df_train_with_probabilities = pd.concat([df_train_with_probabilities, probabilit
 
 # TODO: Add backtesting framework edit function (df as input)
 # With my backtesting framework
-from backtest.backtest_functions.backtest import Strategy
+from backtest.backtest_functions.other.backtest import Strategy
 
 class Simple_PPO(Strategy):
     def __init__(self, currencies, agent, look_back, leverage=1.0, provision=0.0001, starting_capital=10000, use_best_action=False):

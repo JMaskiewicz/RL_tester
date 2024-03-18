@@ -1,44 +1,18 @@
 """
-Transformer based PPO agent for trading version 4.1
-
-# this code
-- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
+DDQN 4.1
 
 # TODO LIST
+- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
-- HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
+- try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
 
-Some notes on the code:
-- learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
-- higher number of epochs agent would less likely to take a neutral position
-
-Reward testing:
-- higher penalty for wrong actions this would make agent more likely to take a neutral position
-- higher number of epochs agent would less likely to take a neutral position
-- premium for holding position agent would less likely to change position
 """
-import cProfile
 import numpy as np
 import pandas as pd
-import time
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from tqdm import tqdm
-import random
-import math
-import gym
-from gym import spaces
-from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.optim.lr_scheduler import ExponentialLR
 import multiprocessing
 from multiprocessing import Process, Queue, Event, Manager
 from threading import Thread
@@ -48,7 +22,16 @@ from time import perf_counter, sleep
 from functools import wraps
 from typing import Callable, Any
 from numba import jit
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
 import math
+import gym
+from gym import spaces
+from itertools import cycle
+from concurrent.futures import ThreadPoolExecutor
+import torch.nn.functional as F
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
@@ -73,13 +56,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 2  # penalty for wrong action
+        reward *= 3  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 - provision) * 10  # penalty for changing position
+        provision_cost = math.log(1 - provision) * 1  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 + provision) * 1  # small premium for holding position
+        provision_cost = math.log(1 + provision) * 0  # small premium for holding position
     else:
         provision_cost = 0
 
@@ -87,257 +70,180 @@ def reward_calculation(previous_close, current_close, previous_position, current
     reward += provision_cost
 
     # Scale the reward to enhance its significance for the learning process
-    final_reward = reward * 100
+    final_reward = reward * 100000
 
     return final_reward
 
-class PPOMemory:
-    def __init__(self, batch_size, device):
-        self.states = None
-        self.probs = None
-        self.actions = None
-        self.vals = None
-        self.rewards = None
-        self.dones = None
-        self.static_states = None
-        self.batch_size = batch_size
-        self.clear_memory()
-        self.device = device
+class DuelingQNetwork(nn.Module):
+    def __init__(self, input_dims, static_state, n_actions, dropout_rate=1/8):
+        super(DuelingQNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_dims + static_state, 2048)
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc_value = nn.Linear(1024, 512)
+        self.value = nn.Linear(512, 1)
+        self.fc_advantage = nn.Linear(1024, 512)
+        self.advantage = nn.Linear(512, n_actions)
 
-    def generate_batches(self):
-        n_states = len(self.states)
-        batch_start = torch.arange(0, n_states, self.batch_size)
-        indices = torch.arange(n_states, dtype=torch.int64)
-        indices = indices[torch.randperm(n_states)]  # Shuffle indices
-        batches = [indices[i:i + self.batch_size] for i in batch_start]
+    def forward(self, state, static_state):
+        x = torch.cat((state, static_state), dim=-1)
+        x = F.relu(self.fc1(state))
+        x = self.dropout1(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout2(x)
 
-        # Include static states in the generated batches
-        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
+        val = F.relu(self.fc_value(x))
+        val = self.value(val)
 
-    def store_memory(self, state, action, probs, vals, reward, done, static_state):
-        self.states.append(torch.tensor(state, dtype=torch.float).unsqueeze(0))
-        self.actions.append(torch.tensor(action, dtype=torch.long).unsqueeze(0))
-        self.probs.append(torch.tensor(probs, dtype=torch.float).unsqueeze(0))
-        self.vals.append(torch.tensor(vals, dtype=torch.float).unsqueeze(0))
-        self.rewards.append(torch.tensor(reward, dtype=torch.float).unsqueeze(0))
-        self.dones.append(torch.tensor(done, dtype=torch.bool).unsqueeze(0))
-        self.static_states.append(torch.tensor(static_state, dtype=torch.float).unsqueeze(0))
+        adv = F.relu(self.fc_advantage(x))
+        adv = self.advantage(adv)
+
+        # Combine value and advantage streams
+        q_values = val + (adv - adv.mean(dim=1, keepdim=True))
+
+        return q_values
+
+class ReplayBuffer:
+    def __init__(self, max_size, input_shape, n_actions):
+        self.mem_size = max_size
+        self.mem_cntr = 0
+        self.state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
+        self.new_state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
+        self.action_memory = np.zeros(self.mem_size, dtype=np.int64)
+        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
+        self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
+        self.static_state_memory = np.zeros((self.mem_size, 1), dtype=np.float32)
+
+    def store_transition(self, state, action, reward, state_, done, static_state):
+        index = self.mem_cntr % self.mem_size
+        self.state_memory[index] = state
+        self.new_state_memory[index] = state_
+        self.action_memory[index] = action
+        self.reward_memory[index] = reward
+        self.terminal_memory[index] = done
+        self.static_state_memory[index] = static_state
+        self.mem_cntr += 1
+
+    def sample_buffer(self, batch_size):
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch = np.random.choice(max_mem, batch_size, replace=False)
+
+        states = self.state_memory[batch]
+        actions = self.action_memory[batch]
+        rewards = self.reward_memory[batch]
+        states_ = self.new_state_memory[batch]
+        dones = self.terminal_memory[batch]
+        static_states = self.static_state_memory[batch]
+
+        return states, actions, rewards, states_, dones, static_states
 
     def clear_memory(self):
-        self.states = []
-        self.probs = []
-        self.actions = []
-        self.vals = []
-        self.rewards = []
-        self.dones = []
-        self.static_states = []
-
-    def stack_tensors(self):
-        self.states = torch.cat(self.states, dim=0).to(self.device)
-        self.actions = torch.cat(self.actions, dim=0).to(self.device)
-        self.probs = torch.cat(self.probs, dim=0).to(self.device)
-        self.vals = torch.cat(self.vals, dim=0).to(self.device)
-        self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
-        self.dones = torch.cat(self.dones, dim=0).to(self.device)
-        self.static_states = torch.cat(self.static_states, dim=0).to(self.device)
+        self.mem_cntr = 0
+        self.state_memory = np.zeros_like(self.state_memory)
+        self.new_state_memory = np.zeros_like(self.new_state_memory)
+        self.action_memory = np.zeros_like(self.action_memory)
+        self.reward_memory = np.zeros_like(self.reward_memory)
+        self.terminal_memory = np.zeros_like(self.terminal_memory)
+        self.static_state_memory = np.zeros_like(self.static_state_memory)
 
 
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
-        super(ActorNetwork, self).__init__()
-        self.input_dims = input_dims
-        self.static_input_dims = static_input_dims
-        self.n_heads = n_heads
-        self.n_layers = n_layers
-        self.dropout_rate = dropout_rate
-
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
-                                                 batch_first=True)
-        self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
-
-        self.max_position_embeddings = 128
-        self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
-        self.fc_static = nn.Linear(static_input_dims, input_dims)
-
-        self.fc1 = nn.Linear(input_dims * 2, 1024)
-        self.ln1 = nn.LayerNorm(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.ln2 = nn.LayerNorm(512)
-        self.fc3 = nn.Linear(512, n_actions)
-
-        self.relu = nn.LeakyReLU()
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, dynamic_state, static_state):
-        batch_size, seq_length, _ = dynamic_state.size()
-        positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
-
-        dynamic_state = dynamic_state + positional_encoding
-        transformer_out = self.transformer_encoder(dynamic_state)
-
-        static_state_encoded = self.fc_static(static_state.unsqueeze(1))
-        combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
-
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-
-        return self.softmax(x)
-
-
-class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
-        super(CriticNetwork, self).__init__()
-        self.input_dims = input_dims
-        self.static_input_dims = static_input_dims
-        self.n_heads = n_heads
-        self.n_layers = n_layers
-        self.dropout_rate = dropout_rate
-
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
-                                                 batch_first=True)
-        self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
-
-        self.max_position_embeddings = 128
-        self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
-        self.fc_static = nn.Linear(static_input_dims, input_dims)
-
-        self.fc1 = nn.Linear(input_dims * 2, 1024)
-        self.ln1 = nn.LayerNorm(1024)
-        self.fc2 = nn.Linear(1024, 512)
-        self.ln2 = nn.LayerNorm(512)
-        self.fc3 = nn.Linear(512, 1)
-        self.relu = nn.LeakyReLU()
-
-    def forward(self, dynamic_state, static_state):
-        batch_size, seq_length, _ = dynamic_state.size()
-        positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
-
-        dynamic_state = dynamic_state + positional_encoding
-        transformer_out = self.transformer_encoder(dynamic_state)
-
-        static_state_encoded = self.fc_static(static_state.unsqueeze(1))
-        combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
-
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-
-        return x
-
-
-class Transformer_PPO_Agent:
-    def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
-                 n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
-                 static_input_dims=1, lr_decay_rate=0.99):
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
-        self.device = torch.device("cpu")
+class DDQN_Agent:
+    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
+        self.n_epochs = n_epochs  # Number of epochs
+        self.mini_batch_size = mini_batch_size  # Mini-batch size
         self.gamma = gamma  # Discount factor
-        self.policy_clip = policy_clip  # PPO policy clipping parameter
-        self.n_epochs = n_epochs  # Number of optimization epochs per batch
-        self.gae_lambda = gae_lambda  # Generalized Advantage Estimation lambda
-        self.mini_batch_size = mini_batch_size  # Size of mini-batches for optimization
-        self.entropy_coefficient = entropy_coefficient  # Entropy coefficient for encouraging exploration
-        self.ec_decay_rate = ec_decay_rate
-        self.l1_lambda = l1_lambda  # L1 regularization coefficient
-        self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
+        self.epsilon = epsilon   # Exploration rate
+        self.epsilon_dec = epsilon_dec  # Exploration rate decay
+        self.epsilon_min = epsilon_end  # Minimum exploration rate
+        self.mem_size = mem_size  # Memory size
+        self.batch_size = batch_size  # Batch size
+        self.replace_target_cnt = replace  # Replace target network count
+        self.learn_step_counter = 0  # Learn step counter
+        self.weight_decay = weight_decay  # Weight decay
+        self.l1_lambda = l1_lambda  # L1 regularization lambda
+        self.action_space = [i for i in range(n_actions)]
 
-        # Initialize the actor and critic networks with static input dimensions
-        self.actor = ActorNetwork(n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
-        self.critic = CriticNetwork(input_dims, static_input_dims=static_input_dims).to(self.device)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
+        self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
+        self.q_policy = DuelingQNetwork(input_dims, static_input_dims, n_actions).to(self.device)
+        self.q_target = DuelingQNetwork(input_dims, static_input_dims, n_actions).to(self.device)
+        self.q_target.load_state_dict(self.q_policy.state_dict())
+        self.q_target.eval()  # Set the target network to evaluation mode
 
-        # Learning rate schedulers
-        self.actor_scheduler = ExponentialLR(self.actor_optimizer, gamma=self.lr_decay_rate)
-        self.critic_scheduler = ExponentialLR(self.critic_optimizer, gamma=self.lr_decay_rate)
-
-        # Memory for storing experiences
-        self.memory = PPOMemory(batch_size, self.device)
+        self.policy_lr = policy_alpha  # Policy learning rate
+        self.target_lr = target_alpha  # Target learning rate
+        self.policy_optimizer = optim.Adam(self.q_policy.parameters(), lr=self.policy_lr, weight_decay=weight_decay)
+        self.target_optimizer = optim.Adam(self.q_target.parameters(), lr=self.target_lr, weight_decay=weight_decay)
 
         # track the generation of the agent
         self.generation = 0
+    def store_transition(self, state, action, reward, state_, done, static_state):
+        self.memory.store_transition(state, action, reward, state_, done, static_state)
 
-    def store_transition(self, state, action, probs, vals, reward, done, static_state):
-        # Include static_state in the memory storage
-        self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
+    def replace_target_network(self):
+        if self.learn_step_counter % self.replace_target_cnt == 0:
+            self.q_target.load_state_dict(self.q_policy.state_dict())
+
+    def decrement_epsilon(self):
+        self.epsilon = self.epsilon * self.epsilon_dec if self.epsilon > self.epsilon_min else self.epsilon_min
 
     def learn(self):
         # track the time it takes to learn
         start_time = time.time()
         print("-" * 100)
-        # Set the actor and critic networks to training mode
-        self.actor.train()
-        self.critic.train()
+        self.replace_target_network()
 
-        # Stack the tensors in the memory
-        self.memory.stack_tensors()
+        # Set the policy network to training mode
+        self.q_policy.train()
 
-        # Loop through the optimization epochs
-        for _ in range(self.n_epochs):
-            # Generating the data for the entire batch, including static states
-            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
+        states, actions, rewards, states_, dones, static_states = self.memory.sample_buffer(self.batch_size)
 
-            # Convert arrays to tensors and move to the device
-            state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
-            action_arr = action_arr.clone().detach().to(self.device)  # Actions
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
-            vals_arr = vals_arr.clone().detach().to(self.device)  # State values
-            reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
-            dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
-            static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
+        for epoch in range(self.n_epochs):  # Loop over epochs
+            num_mini_batches = max(self.batch_size // self.mini_batch_size, 1)
 
-            # Compute advantages and discounted rewards
-            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
-            advantages = advantages.clone().detach().to(self.device)  #
-            discounted_rewards = discounted_rewards.clone().detach().to(self.device)
+            for mini_batch in range(num_mini_batches):
+                start = mini_batch * self.mini_batch_size
+                end = min((mini_batch + 1) * self.mini_batch_size, self.batch_size)
 
-            # Creating mini-batches and training
-            num_samples = len(state_arr)
-            indices = np.arange(num_samples)
-            np.random.shuffle(indices)
+                mini_states = torch.tensor(states[start:end], dtype=torch.float).to(self.device)
+                mini_actions = torch.tensor(actions[start:end]).to(self.device)
+                mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
+                mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
+                mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
+                mini_static_states = torch.tensor(static_states[start:end], dtype=torch.float).to(self.device)
 
-            # Loop through mini-batches
-            for start_idx in range(0, num_samples, self.mini_batch_size):
-                minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
+                self.policy_optimizer.zero_grad()
 
-                # Convert arrays to tensors and move to the device
-                batch_states = state_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_actions = action_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
-                batch_advantages = advantages[minibatch_indices].clone().detach().to(self.device)
-                batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
-                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)
+                q_pred = self.q_policy(mini_states, mini_static_states).gather(1, mini_actions.unsqueeze(-1)).squeeze(-1)
+                q_next = self.q_target(mini_states_, mini_static_states).detach()
+                q_eval = self.q_policy(mini_states_, mini_static_states).detach()
 
-                # Zero the gradients before the backward pass
-                self.actor_optimizer.zero_grad()
-                self.critic_optimizer.zero_grad()
+                max_actions = torch.argmax(q_eval, dim=1)
+                q_next[mini_dones] = 0.0
+                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
-                # Calculate actor and critic losses, include static states in forward passes
-                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions,
-                                                                                       batch_old_probs,
-                                                                                       batch_advantages, batch_returns,
-                                                                                       batch_static_states)
+                # MSE loss
+                loss = F.mse_loss(q_pred, q_target)
 
-                # Perform backpropagation and optimization steps for both actor and critic networks
-                actor_loss.backward()
-                self.actor_optimizer.step()
-                critic_loss.backward()
-                self.critic_optimizer.step()
+                # Calculate L1 penalty for all parameters
+                l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
+                total_loss = loss + self.l1_lambda * l1_penalty
 
-            # Decay learning rate
-            self.actor_scheduler.step()
-            self.critic_scheduler.step()
+                total_loss.backward()
+                self.policy_optimizer.step()
+
+        self.learn_step_counter += 1
+
+        self.decrement_epsilon()
 
         # Clear memory after learning
         self.memory.clear_memory()
 
         # Increment generation of the agent
         self.generation += 1
-
-        # decay entropy coefficient
-        self.entropy_coefficient *= self.ec_decay_rate
 
         # track the time it takes to learn
         end_time = time.time()
@@ -347,153 +253,71 @@ class Transformer_PPO_Agent:
         print(f"\nLearning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 100)
 
-    #@jit(nopython=True)
-    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
-                       batch_returns, batch_static_states):
-        # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
-        if batch_states.dim() == 2:
-            batch_states = batch_states.unsqueeze(1)
-
-        # Actor loss calculations
-        new_probs = self.actor(batch_states, batch_static_states)
-
-        # Calculate the probability ratio and the surrogate loss
-        dist = torch.distributions.Categorical(new_probs)
-
-        # Calculate the log probability of the action in the distribution
-        new_log_probs = dist.log_prob(batch_actions)
-
-        # Calculate the probability ratio
-        prob_ratios = torch.exp(new_log_probs - batch_old_probs)
-
-        # Calculate the surrogate loss
-        surr1 = prob_ratios * batch_advantages
-
-        # Clipped surrogate loss
-        surr2 = torch.clamp(prob_ratios, 1.0 - self.policy_clip, 1.0 + self.policy_clip) * batch_advantages
-
-        # Actor loss
-        actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * dist.entropy().mean()
-
-        # Critic loss calculations
-        critic_values = self.critic(batch_states, batch_static_states).squeeze(-1)
-        critic_loss = (batch_returns - critic_values).pow(2).mean()
-
-        return new_probs, dist.entropy(), actor_loss, critic_loss
-
-    #@jit(nopython=True)
-    def compute_discounted_rewards(self, rewards, values, dones):
-        # Calculate advantages and discounted returns
-        n = len(rewards)
-
-        # Create tensors to store advantages and discounted returns
-        discounted_rewards = torch.zeros_like(rewards)
-        advantages = torch.zeros_like(rewards)
-
-        # Initialize the advantage and the last GAE (Generalized Advantage Estimation) lambda
-        last_gae_lam = 0
-
-        # Convert 'dones' to a float tensor
-        dones = dones.float()
-
-        for t in reversed(range(n)):
-            # If the current time step is the last one, the next non-terminal is 0
-            if t == n - 1:
-                next_non_terminal = 1.0 - dones[t]
-                next_values = 0
-            # Otherwise, the next non-terminal is 1 - 'dones[t + 1]', and the next value is 'values[t + 1]'
-            else:
-                next_non_terminal = 1.0 - dones[t + 1]
-                next_values = values[t + 1]
-
-            # Calculate the Temporal Difference (TD) error
-            delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
-
-            # Update the advantages and the last GAE lambda
-            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
-
-            # Update the advantages and the discounted returns
-            advantages[t] = last_gae_lam
-
-            # Calculate the discounted return
-            discounted_rewards[t] = advantages[t] + values[t]
-
-        return advantages, discounted_rewards
+    @torch.no_grad()
+    def choose_action(self, observation, static_input):
+        if np.random.random() > self.epsilon:
+            # Prepare static input tensor
+            static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
+            observation_tensor = torch.tensor([observation], dtype=torch.float).to(self.device)
+            # Call q_policy with both observation and static input
+            actions = self.q_policy(observation_tensor, static_input_tensor)
+            action = torch.argmax(actions).item()
+        else:
+            action = np.random.choice(self.action_space)
+        return action
 
     @torch.no_grad()
-    def choose_action(self, observation, static_input):  # TODO check if this is correct
-        # Ensure observation is a NumPy array
-        if not isinstance(observation, np.ndarray):
-            observation = np.array(observation)
-
-        # Reshape observation to [1, sequence length, feature dimension]
-        observation = observation.reshape(1, -1, observation.shape[-1])
-
-        # Convert observation and static_input to tensors and move them to the appropriate device
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+    def get_action_q_values(self, observation, static_input):
+        """
+        Returns the Q-values of each action for a given observation.
+        """
+        # Prepare static input
         static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
-
-        # Ensure state has the correct 3D shape: [batch size, sequence length, feature dimension]
-        if state.dim() != 3:  # Add missing dimensions if necessary
-            state = state.view(1, -1, state.size(-1))
-
-        # Pass the state and static_input_tensor through the actor network to get the action probabilities
-        probs = self.actor(state, static_input_tensor)
-
-        # Create a categorical distribution over the list of probabilities of actions
-        dist = torch.distributions.Categorical(probs)
-
-        # Sample an action from the distribution
-        action = dist.sample()
-
-        # Calculate the log probability of the action in the distribution
-        log_prob = dist.log_prob(action)
-
-        # Pass the state and static_input_tensor through the critic network to get the state value
-        value = self.critic(state, static_input_tensor)
-
-        # Return the sampled action, its log probability, and the state value
-        # Convert tensors to Python numbers using .item()
-        return action.item(), log_prob.item(), value.item()
-
-    @torch.no_grad()
-    def get_action_probabilities(self, observation, static_input):
-        # Ensure observation is a NumPy array
-        if not isinstance(observation, np.ndarray):
-            observation = np.array(observation)
-
-        # Reshape observation to [1, sequence length, feature dimension]
-        observation = observation.reshape(1, -1, observation.shape[-1])
-
-        # Convert observation and static_input to tensors and move them to the appropriate device
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
-
-        # Ensure state has the correct 3D shape: [batch size, sequence length, feature dimension]
-        if state.dim() != 3:  # Add missing dimensions if necessary
-            state = state.view(1, -1, state.size(-1))
-
-        # Pass the state and static_input_tensor through the actor network to get the action probabilities
-        action_probs = self.actor(state, static_input_tensor)
-
-        # Ensure action_probs does not contain any gradients and convert it to a NumPy array
-        action_probs = action_probs.detach().cpu().numpy()
-
-        # Squeeze the batch dimension from action_probs since we're dealing with a single observation
-        action_probs = np.squeeze(action_probs, axis=0)
-
-        # Return the action probabilities as a NumPy array
-        return action_probs
+        observation_tensor = torch.tensor([observation], dtype=torch.float).to(self.device)
+        # Call q_policy with both observation and static input
+        q_values = self.q_policy(observation_tensor, static_input_tensor)
+        return q_values.cpu().numpy()
 
     @torch.no_grad()
     def choose_best_action(self, observation, static_input):
-        # Use the get_action_probabilities method to get the action probabilities for the given observation and static input
-        action_probs = self.get_action_probabilities(observation, static_input)
-
-        # Choose the action with the highest probability
-        best_action = np.argmax(action_probs)
-
+        """
+        Selects the best action based on the highest Q-value without exploration.
+        """
+        q_values = self.get_action_q_values(observation, static_input)
+        best_action = np.argmax(q_values)
         return best_action
+
+    @torch.no_grad()
+    def get_action_probabilities(self, observation, static_input):
+        """
+        Returns the probabilities of each action for a given observation, taking into account the static input.
+        Converts Q values to a probability distribution using the softmax function.
+        """
+        # Ensure observation is a numpy array
+        if not isinstance(observation, np.ndarray):
+            observation = np.array(observation)
+
+        # Prepare static input
+        static_input = np.array([static_input])  # Convert static input to numpy array if not already
+        merged_observation = np.concatenate((observation, static_input), axis=None).reshape(1, -1)
+
+        # Convert merged observation to tensor
+        state_tensor = torch.tensor(merged_observation, dtype=torch.float).to(self.device)
+
+        # Separate observation and static state for network input
+        observation_tensor = state_tensor[:, :-1]  # Assuming last column is static state
+        static_input_tensor = state_tensor[:, -1].view(-1, 1)  # Reshape for compatibility
+
+        # Compute Q values with both observation and static state
+        q_values = self.q_policy(observation_tensor, static_input_tensor)
+
+        # Convert Q values to probabilities
+        probabilities = F.softmax(q_values, dim=1).cpu().numpy()
+
+        return probabilities.flatten()
+
+    def get_epsilon(self):
+        return self.epsilon
 
     def get_name(self):
         """
@@ -708,7 +532,7 @@ def progress_update(interval=60):
         return wrapper
     return decorator
 
-def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
+def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
     """
     # TODO add description
     """
@@ -718,8 +542,11 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     number_of_trades = 0
 
     # Preparing the environment
-    agent.actor.eval()
-    agent.critic.eval()
+    eval_methods = [('actor', 'critic'), ('q_policy',)]
+    for method_group in eval_methods:
+        for method in method_group:
+            if hasattr(agent, method):
+                getattr(agent, method).eval()
 
     with torch.no_grad():
         # Create a backtesting environment
@@ -767,27 +594,28 @@ def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, p
     action_df = pd.DataFrame(best_action_list, columns=['Action'])
 
     # Ensure the agent's networks are reverted back to training mode
-    agent.actor.train()
-    agent.critic.train()
+    for method_group in eval_methods:
+        for method in method_group:
+            if hasattr(agent, method):
+                getattr(agent, method).train()
 
     return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
-def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None):
+def backtest_wrapper_AC(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None):
     """
     # TODO add description
-    AC - Actor Critic
     """
-    return generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic)
+    return generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic)
 
 @get_time
 #@print_signal_status
-def backtest_in_background(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed):
+def backtest_in_background(agent_type, agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed):
     start_time = time.time()
     print("Starting backtesting...")
     with ThreadPoolExecutor(max_workers=num_workers_backtesting) as executor:
         futures = []
         for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-            future = executor.submit(backtest_wrapper_AC, df, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, Trading_Environment_Basic)
+            future = executor.submit(backtest_wrapper_AC, agent_type, df, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, Trading_Environment_Basic)
             futures.append((future, label))
 
         for future, label in futures:
@@ -820,7 +648,7 @@ def backtest_in_background(agent, backtest_results, num_workers_backtesting, val
     print(f"Backtesting completed in {episode_time:.2f} seconds\n")
 
 
-def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signal, resume_signal, total_rewards, total_balances, worker_id, individual_worker_batch_size, workers_completed, workers_completed_signal, shared_episodes_counter):
+def environment_worker(agent_type, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signal, resume_signal, total_rewards, total_balances, worker_id, individual_worker_batch_size, workers_completed, workers_completed_signal, shared_episodes_counter):
     random.seed(worker_id)  # Seed the random number generator with a unique seed for this worker
 
     experiences_collected = 0  # Initialize a counter for collected experiences
@@ -840,10 +668,10 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
                 experiences_collected = 0  # Reset the counter after pausing
                 start_time = time.time()  # Reset the start time for the next batch
                 resume_signal.clear()  # Clear the resume signal
-
-            action, prob, val = agent.choose_action(observation, env.current_position)
+            # TODO here
+            action = agent.choose_action(observation, env.current_position)
             observation_, reward, done, info = env.step(action)
-            experience = (observation, action, prob, val, reward, done, env.current_position)
+            experience = (observation, action, reward, observation_, done, env.current_position)
             shared_queue.put(experience)
             observation = observation_
 
@@ -874,18 +702,18 @@ def environment_worker(dfs, shared_queue, max_episodes_per_worker, env_settings,
 # TODO add early stopping based on the validation set from the backtesting
 
 @get_time
-def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
+def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
                       num_workers, num_workers_backtesting, backtesting_frequency=1):
 
     manager = Manager()
     total_rewards, total_balances, shared_episodes_counter, workers_completed, backtesting_completed, work_event, pause_signals, resume_signals, workers_completed_signal, shared_queue = setup_shared_resources_and_events(
         manager, num_workers)
 
-    workers = start_workers(num_workers, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event,
+    workers = start_workers(agent_type, num_workers, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event,
                             pause_signals, resume_signals, total_rewards, total_balances, workers_completed,
                             workers_completed_signal, shared_episodes_counter, batch_size_for_learning)
 
-    manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event,
+    manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event,
                                     pause_signals, resume_signals, shared_queue, workers_completed_signal,
                                     shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning,
                                     backtesting_frequency, max_episodes_per_worker, num_workers)
@@ -899,7 +727,7 @@ def collect_and_learn(dfs, max_episodes_per_worker, env_settings, batch_size_for
 
 @get_time
 @progress_update(interval=10)
-def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4):
+def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4):
     agent_generation = 0
     try:
         total_experiences = 0
@@ -927,7 +755,7 @@ def manage_learning_and_backtesting(agent, num_workers_backtesting, backtest_res
 
                 if agent.generation > agent_generation and agent.generation % backtesting_frequency == 0:
                     backtesting_completed.clear()
-                    backtest_thread = Thread(target=backtest_in_background, args=(agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed))
+                    backtest_thread = Thread(target=backtest_in_background, args=(agent_type, agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed))
                     backtest_thread.start()
                     agent_generation = agent.generation
 
@@ -953,10 +781,10 @@ def setup_shared_resources_and_events(manager, num_workers):
     shared_queue = manager.Queue()
     return total_rewards, total_balances, shared_episodes_counter, workers_completed, backtesting_completed, work_event, pause_signals, resume_signals, workers_completed_signal, shared_queue
 
-def start_workers(num_workers, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signals, resume_signals, total_rewards, total_balances, workers_completed, workers_completed_signal, shared_episodes_counter, batch_size_for_learning):
+def start_workers(agent_type, num_workers, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signals, resume_signals, total_rewards, total_balances, workers_completed, workers_completed_signal, shared_episodes_counter, batch_size_for_learning):
     workers = []
     for i in range(num_workers):
-        worker_process = Process(target=environment_worker, args=(dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signals[i], resume_signals[i], total_rewards, total_balances, i+1, batch_size_for_learning // num_workers, workers_completed, workers_completed_signal, shared_episodes_counter))
+        worker_process = Process(target=environment_worker, args=(agent_type, dfs, shared_queue, max_episodes_per_worker, env_settings, agent, work_event, pause_signals[i], resume_signals[i], total_rewards, total_balances, i+1, batch_size_for_learning // num_workers, workers_completed, workers_completed_signal, shared_episodes_counter))
         worker_process.start()
         workers.append(worker_process)
     return workers
@@ -1066,14 +894,14 @@ if __name__ == '__main__':
         {"variable": ("Close", "EURUSD"), "edit": "standardize"},
         {"variable": ("Close", "EURJPY"), "edit": "standardize"},
         {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": None},
-        {"variable": ("ATR_24", "EURUSD"), "edit": None},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("sin_time_1W", ""), "edit": None},
+        #{"variable": ("cos_time_1W", ""), "edit": None},
+        #{"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        #{"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -1086,7 +914,7 @@ if __name__ == '__main__':
     # Training parameters
     batch_size = 1024  # 8192
     epochs = 10  # 40
-    mini_batch_size = 64  # 256
+    mini_batch_size = 128  # 256
     leverage = 10  # 30
     l1_lambda = 1e-7  # L1 regularization
     weight_decay = 0.000001  # L2 regularization
@@ -1096,7 +924,7 @@ if __name__ == '__main__':
     print(f"Number of CPU cores: {num_cores}")
     num_workers = min(max(1, num_cores - 1), 4)  # Number of workers, some needs to left for backtesting
     num_workers_backtesting = 8  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 8000  # need to be divisible by num_workers
+    num_episodes = 200  # need to be divisible by num_workers
     max_episodes_per_worker = num_episodes // num_workers
 
     '''
@@ -1119,22 +947,23 @@ if __name__ == '__main__':
     backtest_results = {}
 
     # Create an instance of the agent
-    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
-                                  input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.9,  # discount factor for future rewards
-                                  alpha=0.001,  # learning rate for networks (actor and critic) high as its decaying
-                                  gae_lambda=0.9,  # lambda for generalized advantage estimation
-                                  policy_clip=0.2,  # clip parameter for PPO
-                                  entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.9999,  # entropy coefficient decay rate
-                                  batch_size=batch_size,  # size of the memory
-                                  n_epochs=epochs,  # number of epochs
-                                  mini_batch_size=mini_batch_size,  # size of the mini-batches
-                                  weight_decay=weight_decay,  # weight decay
-                                  l1_lambda=l1_lambda,  # L1 regularization lambda
-                                  static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.9999,  # learning rate decay rate
-                                  )
+    agent = DDQN_Agent(input_dims=len(variables) * look_back,
+                       n_actions=3,
+                       n_epochs=epochs,
+                       mini_batch_size=mini_batch_size,
+                       policy_alpha=0.000005,
+                       target_alpha=0.0000005,
+                       gamma=0.9,
+                       epsilon=1.0,
+                       epsilon_dec=0.99,
+                       epsilon_end=0,
+                       mem_size=100000,
+                       batch_size=batch_size,
+                       replace=5,
+                       weight_decay=weight_decay,
+                       l1_lambda=l1_lambda,
+                       static_input_dims=1,
+                       )
 
     # Environment settings
     env_settings = {
@@ -1154,7 +983,7 @@ if __name__ == '__main__':
     balances_dfs = {}
 
     # Collecting and learning data in parallel
-    total_rewards, total_balances = collect_and_learn(rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=5)
+    total_rewards, total_balances = collect_and_learn('DQN', rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=5)
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(df)
@@ -1172,4 +1001,3 @@ if __name__ == '__main__':
     end_time_X = time.time()
     episode_time_X = end_time_X - start_time_X
     print(f"full run completed in {episode_time_X:.2f} seconds, END")
-

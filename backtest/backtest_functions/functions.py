@@ -7,6 +7,85 @@ import numpy as np
 import torch
 import math
 
+def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None, reward_function=None):
+    """
+    # TODO add description
+    """
+    action_probabilities_list = []
+    best_action_list = []
+    balances = []
+    number_of_trades = 0
+
+    # Preparing the environment
+    if agent_type == 'PPO':
+        agent.actor.eval()
+        agent.critic.eval()
+    elif agent_type == 'DQN':
+        agent.q_policy.eval()
+
+    with torch.no_grad():
+        # Create a backtesting environment
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+                                        tradable_markets=mkf, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage, reward_function=reward_function)
+
+        observation = env.reset()
+        done = False
+
+        while not done:  # TODO check if this is correct
+            action_probs = agent.get_action_probabilities(observation, env.current_position)
+            best_action = np.argmax(action_probs)
+
+            if (best_action-1) != env.current_position and abs(best_action-1) == 1:
+                number_of_trades += 1
+
+            observation_, reward, done, info = env.step(best_action)
+            observation = observation_
+
+            balances.append(env.balance)  # Update balances
+            action_probabilities_list.append(action_probs.tolist())
+            best_action_list.append(best_action-1)
+
+    # KPI Calculations
+    buy_and_hold_return = starting_balance * (df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back] - 1)
+    sell_and_hold_return = starting_balance * (1 - df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back])
+
+    returns = pd.Series(balances).pct_change().dropna()
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')
+
+    cumulative_returns = (1 + returns).cumprod()
+    peak = cumulative_returns.expanding(min_periods=1).max()
+    drawdown = (cumulative_returns - peak) / peak
+    max_drawdown = drawdown.min()
+
+    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)
+    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+
+    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1
+    calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
+
+    # Convert the list of action probabilities to a DataFrame
+    probabilities_df = pd.DataFrame(action_probabilities_list, columns=['Short', 'Neutral', 'Long'])
+    action_df = pd.DataFrame(best_action_list, columns=['Action'])
+
+    # Ensure the agent's networks are reverted back to training mode
+    if agent_type == 'PPO':
+        agent.actor.train()
+        agent.critic.train()
+    elif agent_type == 'DQN':
+        agent.q_policy.train()
+
+    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+
+def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
+    """
+    # TODO add description
+    """
+    return generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic, reward_function)
+
+
+
+
 def make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):
     """
     # TODO add description

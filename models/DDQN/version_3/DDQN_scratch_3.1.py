@@ -1,5 +1,5 @@
 """
-DDQN 3.1
+DDQN 2.3
 
 # TODO LIST
 - Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
@@ -9,7 +9,6 @@ DDQN 3.1
 - try transformer architecture or TFT transformer (Temporal Fusion Transformers transformer time series)
 
 """
-
 import numpy as np
 import pandas as pd
 import time
@@ -23,129 +22,73 @@ import gym
 from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 import torch.nn.functional as F
+from numba import jit
+import math
+import multiprocessing
+from multiprocessing import Process, Queue, Event, Manager
+from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-from data.function.edit import normalize_data, standardize_data
+from data.function.edit import normalize_data, standardize_data, process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
+from functions.utilis import prepare_backtest_results, generate_index_labels
 
-def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
-    reward = 0
-    reward_return = (current_close / previous_close - 1) * current_position * leverage
-    if previous_position != current_position:
-        provision_cost = provision * (abs(current_position) == 1)
-    else:
-        provision_cost = 0
-
-    if reward_return < 0:
-        reward_return = 2 * reward_return
-
-    reward += reward_return * 10000 - provision_cost * 100
-
-    return reward
-
-def generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, provision=0.001, initial_balance=10000, leverage=1, Trading_Environment_Basic=None, plot=False):
-    # Initial setup
-    balance = initial_balance
-    total_reward = 0
-    number_of_trades = 0
-    balances = [initial_balance]
-
-    action_probabilities_list = []
-    best_action_list = []
-
-    # Preparing the environment
-    env = Trading_Environment_Basic(df, look_back=look_back, variables=variables, tradable_markets=[mkf],
-                                     provision=provision, initial_balance=initial_balance, leverage=leverage)
-    agent.q_policy.eval()
-
-    with torch.no_grad():  # Disable gradient computation
-        for observation_idx in range(len(df) - env.look_back):
-            # Environment observation
-            current_position = env.current_position
-            observation = env.reset(observation_idx, reset_position=False)
-
-            # Get action probabilities for the current observation
-            action_probs = agent.get_action_probabilities(observation, current_position)
-            best_action = np.argmax(action_probs) - 1  # Adjusting action scale if necessary
-
-            # Simulate the action in the environment
-            if observation_idx + env.look_back < len(df):
-                current_price = df[('Close', mkf)].iloc[observation_idx + env.look_back - 1]
-                next_price = df[('Close', mkf)].iloc[observation_idx + env.look_back]
-                market_return = next_price / current_price - 1
-
-                if best_action != current_position:
-                    provision_cost = provision * (abs(best_action) == 1)
-                    number_of_trades += 1
-                else:
-                    provision_cost = 0
-                # TODO there is something wrong balance is only decreasing ???
-                balance *= (1 + market_return * current_position * leverage - provision_cost)
-                balances.append(balance)  # Update daily balance
-
-                # Store action probabilities
-                action_probabilities_list.append(action_probs.tolist())
-                best_action_list.append(best_action)
-                current_position = best_action
-
-                total_reward += reward_calculation(current_price, next_price, current_position, best_action, leverage, provision)
-
-    # KPI Calculations
-    buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
-    sell_and_hold_return = -buy_and_hold_return
-
-    returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
-
-    cumulative_returns = (1 + returns).cumprod()
-    peak = cumulative_returns.expanding(min_periods=1).max()
-    drawdown = (cumulative_returns - peak) / peak
-    max_drawdown = drawdown.min()
-
-    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)  # change 252
-    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
-
-    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1  # change 252
-    calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
-
-    # Convert the list of action probabilities to a DataFrame
-    probabilities_df = pd.DataFrame(action_probabilities_list, columns=['Short', 'Neutral', 'Long'])
-    action_df = pd.DataFrame(best_action_list, columns=['Action'])
-
-    # Switch back to training mode
-    agent.q_policy.train()
-
-    return balance, total_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
-
-def backtest_wrapper_DQN(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
-                        Trading_Environment_Basic=None):
-    """
-    # TODO add description
-    DQN - Actor Critic
-    """
-    return generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, provision, initial_balance,
-                                                leverage, Trading_Environment_Basic)
+# import environment class
+from trading_environment.environment import Trading_Environment_Basic
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
 
+# reward calculation is input for the environment class
+@jit(nopython=True)
+def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
+    # Calculate the log return
+    if previous_close != 0 and current_close != 0:
+        log_return = math.log(current_close / previous_close)
+    else:
+        log_return = 0
+
+    # Calculate the base reward
+    reward = log_return * current_position * leverage
+
+    # Penalize the agent for taking the wrong action
+    if reward < 0:
+        reward *= 3  # penalty for wrong action
+
+    # Calculate the cost of provision if the position has changed, and it's not neutral (0).
+    if current_position != previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 - provision) * 100  # penalty for changing position
+    elif current_position == previous_position and abs(current_position) == 1:
+        provision_cost = math.log(1 + provision) * 10  # small premium for holding position
+    else:
+        provision_cost = 0
+
+    # Apply the provision cost
+    reward += provision_cost
+
+    # Scale the reward to enhance its significance for the learning process
+    final_reward = reward * 100
+
+    return final_reward
+
 class DuelingQNetwork(nn.Module):
     def __init__(self, input_dims, n_actions, dropout_rate=1/8):
         super(DuelingQNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
+        self.fc1 = nn.Linear(input_dims, 512)
         self.dropout1 = nn.Dropout(dropout_rate)
-        self.fc2 = nn.Linear(2048, 1024)
+        self.fc2 = nn.Linear(512, 512)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc_value = nn.Linear(1024, 512)
-        self.value = nn.Linear(512, 1)
-        self.fc_advantage = nn.Linear(1024, 512)
-        self.advantage = nn.Linear(512, n_actions)
+        self.fc_value = nn.Linear(512, 256)
+        self.value = nn.Linear(256, 1)
+        self.fc_advantage = nn.Linear(512, 256)
+        self.advantage = nn.Linear(256, n_actions)
 
     def forward(self, state):
         x = F.relu(self.fc1(state))
@@ -205,34 +148,43 @@ class ReplayBuffer:
 
 
 class DDQN_Agent:
-    def __init__(self, input_dims, n_actions, epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005 , epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5):
+    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.epochs = epochs
-        self.mini_batch_size = mini_batch_size
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_dec = epsilon_dec
-        self.epsilon_min = epsilon_end
+        self.n_epochs = n_epochs  # Number of epochs
+        self.mini_batch_size = mini_batch_size  # Mini-batch size
+        self.gamma = gamma  # Discount factor
+        self.epsilon = epsilon   # Exploration rate
+        self.epsilon_dec = epsilon_dec  # Exploration rate decay
+        self.epsilon_min = epsilon_end  # Minimum exploration rate
+        self.mem_size = mem_size  # Memory size
+        self.batch_size = batch_size  # Batch size
+        self.replace_target_cnt = replace  # Replace target network count
+        self.learn_step_counter = 0  # Learn step counter
+        self.weight_decay = weight_decay  # Weight decay
+        self.l1_lambda = l1_lambda  # L1 regularization lambda
+        self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
         self.action_space = [i for i in range(n_actions)]
-        self.mem_size = mem_size
-        self.batch_size = batch_size
-        self.replace_target_cnt = replace
-        self.learn_step_counter = 0
-        self.weight_decay = weight_decay
-        self.l1_lambda = l1_lambda
 
+        # Memory
         self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
-        self.q_target.eval()
+        self.q_target.eval()  # Set the target network to evaluation mode
 
-        self.policy_lr = policy_alpha
-        self.target_lr = target_alpha
+        self.policy_lr = policy_alpha  # Policy learning rate
+        self.target_lr = target_alpha  # Target learning rate
         self.policy_optimizer = optim.Adam(self.q_policy.parameters(), lr=self.policy_lr, weight_decay=weight_decay)
         self.target_optimizer = optim.Adam(self.q_target.parameters(), lr=self.target_lr, weight_decay=weight_decay)
+
+        # track the generation of the agent
+        self.generation = 0
+
+        # Learning rate schedulers
+        self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
+        self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
     def store_transition(self, state, action, reward, state_, done):
         self.memory.store_transition(state, action, reward, state_, done)
@@ -245,9 +197,9 @@ class DDQN_Agent:
         self.epsilon = self.epsilon * self.epsilon_dec if self.epsilon > self.epsilon_min else self.epsilon_min
 
     def learn(self):
-        if self.memory.mem_cntr < self.batch_size:
-            return
+        # track the time it takes to learn
         start_time = time.time()
+        print("-" * 100)
         self.replace_target_network()
 
         # Set the policy network to training mode
@@ -255,7 +207,7 @@ class DDQN_Agent:
 
         states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
 
-        for epoch in range(self.epochs):  # Loop over epochs
+        for epoch in range(self.n_epochs):  # Loop over epochs
             num_mini_batches = max(self.batch_size // self.mini_batch_size, 1)
 
             for mini_batch in range(num_mini_batches):
@@ -288,16 +240,29 @@ class DDQN_Agent:
                 total_loss.backward()
                 self.policy_optimizer.step()
 
+        # Decay learning rate
+        self.policy_scheduler.step()
+        self.target_scheduler.step()
+
         self.learn_step_counter += 1
-        print('Epsilon decreasing...')
         self.decrement_epsilon()
+
+        # Clear memory after learning
+        self.memory.clear_memory()
+
+        # Increment generation of the agent
+        self.generation += 1
+
+        # track the time it takes to learn
         end_time = time.time()
         episode_time = end_time - start_time
-        print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
 
+        # print the time it takes to learn
+        print(f"\nLearning of agent generation {self.generation} completed in {episode_time} seconds")
+        print("-" * 100)
 
-
-    def choose_action(self, observation):
+    @torch.no_grad()
+    def choose_action(self, observation, current_position):
         if np.random.random() > self.epsilon:
             # Convert the observation to a numpy array if it's not already
             if not isinstance(observation, np.ndarray):
@@ -312,7 +277,8 @@ class DDQN_Agent:
             action = np.random.choice(self.action_space)
         return action
 
-    def get_action_q_values(self, observation, static_input):
+    @torch.no_grad()
+    def get_action_q_values(self, observation, current_position):
         """
         Returns the Q-values of each action for a given observation.
         """
@@ -327,7 +293,8 @@ class DDQN_Agent:
 
         return q_values.cpu().numpy()
 
-    def choose_best_action(self, observation, static_input):
+    @torch.no_grad()
+    def choose_best_action(self, observation, current_position):
         """
         Selects the best action based on the highest Q-value without exploration.
         """
@@ -338,14 +305,15 @@ class DDQN_Agent:
     def get_epsilon(self):
         return self.epsilon
 
-    def get_action_probabilities(self, observation, static_input):
+    @torch.no_grad()
+    def get_action_probabilities(self, observation, current_position):
         """
         Returns the probabilities of each action for a given observation.
         Converts Q values to a probability distribution using the softmax function.
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
-
+        observation = np.append(observation, current_position)
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
@@ -362,89 +330,211 @@ class DDQN_Agent:
         return self.__class__.__name__
 
 
-class Trading_Environment_Basic(gym.Env):
-    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001,
-                 initial_balance=10000, leverage=1):
-        super(Trading_Environment_Basic, self).__init__()
-        self.df = df.reset_index(drop=True)
-        self.look_back = look_back
-        self.initial_balance = initial_balance
-        self.current_position = 0  # This is a static part of the state
-        self.variables = variables
-        self.tradable_markets = tradable_markets
-        self.provision = provision
-        self.leverage = leverage
+if __name__ == '__main__':
+    # time the execution
+    start_time_X = time.time()
+    # Set seeds for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
 
-        # Define action space: 0 (sell), 1 (hold), 2 (buy)
-        self.action_space = spaces.Discrete(3)
+    # Example usage
+    # Stock market variables
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-        self.reset()
+    indicators = [
+        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
+        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
+        {"indicator": "MACD", "mkf": "EURUSD"},
+        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
-    def calculate_input_dims(self):
-        num_variables = len(self.variables)  # Number of variables
-        input_dims = num_variables * self.look_back  # Variables times look_back
-        return input_dims
+    return_indicators = [
+        {"price_type": "Close", "mkf": "EURUSD"},
+        {"price_type": "Close", "mkf": "USDJPY"},
+        {"price_type": "Close", "mkf": "EURJPY"},
+        {"price_type": "Close", "mkf": "GBPUSD"},
+    ]
+    add_indicators(df, indicators)
+    add_returns(df, return_indicators)
 
-    def reset(self, observation_idx=None, reset_position=True):
-        if observation_idx is not None:
-            self.current_step = observation_idx + self.look_back
-        else:
-            self.current_step = self.look_back
+    add_time_sine_cosine(df, '1W')
+    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
-        self.balance = self.initial_balance
-        if reset_position:
-            self.current_position = 0
-        self.done = False
-        return self._next_observation()
+    df = df.dropna()
+    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2021-01-01'
+    test_date = '2022-01-01'
+    df_train = df[start_date:validation_date]
+    df_validation = df[validation_date:test_date]
+    df_test = df[test_date:'2023-01-01']
 
-    def _next_observation(self):
-        start = max(self.current_step - self.look_back, 0)
-        end = self.current_step
+    variables = [
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        {"variable": ("sin_time_1W", ""), "edit": None},
+        {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+    ]
 
-        tasks = [(self.df[variable['variable']].iloc[start:end].values, variable['edit']) for variable in
-                 self.variables]
+    tradable_markets = 'EURUSD'
+    window_size = '1Y'
+    starting_balance = 10000
+    look_back = 20
+    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
-        # Use ThreadPoolExecutor to parallelize data transformation
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            # Prepare and execute tasks
-            future_to_variable = {executor.submit(process_variable, data, edit_type): (data, edit_type) for data, edit_type in tasks}
-            results = []
-            for future in concurrent.futures.as_completed(future_to_variable):
-                data, edit_type = future_to_variable[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    print('%r generated an exception: %s' % ((data, edit_type), exc))
-                else:
-                    results.append(result)
+    # Training parameters
+    batch_size = 1024
+    n_epochs = 20  # 40
+    mini_batch_size = 64
+    leverage = 10
+    weight_decay = 0.000005
+    l1_lambda = 0.0000005
+    num_episodes = 1000  # 100
+    # Create the environment
 
-        # Concatenate results to form the scaled observation array
-        scaled_observation = np.concatenate(results).flatten()
-        return scaled_observation
+    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,
+                       n_actions=3,
+                       n_epochs=n_epochs,
+                       mini_batch_size=mini_batch_size,
+                       policy_alpha=0.0005,
+                       target_alpha=0.00005,
+                       gamma=0.9,
+                       epsilon=1.0,
+                       epsilon_dec=0.99,
+                       epsilon_end=0,
+                       mem_size=100000,
+                       batch_size=batch_size,
+                       replace=5,  # num_episodes // 4
+                       weight_decay=weight_decay,
+                       l1_lambda=l1_lambda,
+                       lr_decay_rate=0.999)
 
-    def step(self, action):  # TODO: Check if this is correct
-        action_mapping = {0: -1, 1: 0, 2: 1}
-        mapped_action = action_mapping[action]
+    total_rewards = []
+    episode_durations = []
+    total_balances = []
+    episode_probabilities = {'train': [], 'validation': [], 'test': []}
 
-        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
-        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
+    index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
+    columns = ['Final Balance', 'Dataset Index']
+    backtest_results = pd.DataFrame(index=index, columns=columns)
 
-        # balance update
-        market_return = next_price / current_price - 1
-        if mapped_action != self.current_position:
-            provision_cost = self.provision * (abs(mapped_action) == 1)
-        else:
-            provision_cost = 0
+    window_size_2 = '3M'
+    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
+    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
-        self.balance *= (1 + market_return * self.current_position * self.leverage - provision_cost)
+    # Generate index labels for each rolling window dataset
+    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
+    test_labels = generate_index_labels(test_rolling_datasets, 'test')
+    all_labels = val_labels + test_labels
 
-        # reward calculation
-        final_reward = reward_calculation(current_price, next_price, self.current_position, mapped_action, self.leverage, self.provision)
-        self.current_position = mapped_action
-        self.current_step += 1
-        self.done = self.current_step >= len(self.df) - 1
+    # Rolling DF
+    rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
+    dataset_iterator = cycle(rolling_datasets)
 
-        return self._next_observation(), final_reward, self.done, {}
+    probs_dfs = {}
+    balances_dfs = {}
+    backtest_results = {}
+    generation = 0
 
+    for episode in tqdm(range(num_episodes)):
+        window_df = next(dataset_iterator)
+        dataset_index = episode % len(rolling_datasets)
 
+        print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        # Create a new environment with the randomly selected window's data
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
 
+        observation = env.reset()
+        done = False
+        cumulative_reward = 0
+        start_time = time.time()
+        initial_balance = env.balance
+        observation = np.append(observation, 0)
+        while not done:
+            action = agent.choose_action(observation, env.current_position)
+            observation_, reward, done, info = env.step(action)
+            observation_ = np.append(observation_, env.current_position)
+            agent.store_transition(observation, action, reward, observation_, done)
+            observation = observation_
+            cumulative_reward += reward
+
+            # Check if enough data is collected or if the dataset ends
+            if agent.memory.mem_cntr >= agent.batch_size:
+                agent.learn()
+                agent.memory.clear_memory()
+
+            if generation < agent.generation:
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+                        future = executor.submit(BF.backtest_wrapper, 'DQN', df, agent, 'EURUSD', look_back,
+                                                 variables, provision, starting_balance, leverage,
+                                                 Trading_Environment_Basic, reward_calculation)
+                        futures.append((future, label))
+
+                    for future, label in futures:
+                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
+                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
+                         cumulative_returns, balances) = future.result()
+                        result_data = {
+                            'Agent generation': agent.generation,
+                            'Label': label,
+                            'Final Balance': balance,
+                            'Total Reward': total_reward,
+                            'Number of Trades': number_of_trades,
+                            'Buy and Hold Return': buy_and_hold_return,
+                            'Sell and Hold Return': sell_and_hold_return,
+                            'Sharpe Ratio': sharpe_ratio,
+                            'Max Drawdown': max_drawdown,
+                            'Sortino Ratio': sortino_ratio,
+                            'Calmar Ratio': calmar_ratio
+                        }
+                        key = (agent.generation, label)
+                        if key not in backtest_results:
+                            backtest_results[key] = []
+                        backtest_results[key].append(result_data)
+                        # Store probabilities and balances for plotting
+                        probs_dfs[(agent.generation, label)] = probs_df
+                        balances_dfs[(agent.generation, label)] = balances
+                    generation = agent.generation
+                    print(f"Backtesting completed for agent generation {generation}")
+
+        # results
+        end_time = time.time()
+        episode_time = end_time - start_time
+        total_rewards.append(cumulative_reward)
+        episode_durations.append(episode_time)
+        total_balances.append(env.balance)
+
+        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
+        print("-----------------------------------")
+
+    #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
+    #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
+
+    backtest_results = prepare_backtest_results(backtest_results)
+    backtest_results = backtest_results.set_index(['Agent Generation'])
+    print(backtest_results)
+
+    from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
+
+    plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
+    plot_total_rewards(total_rewards, agent.get_name())
+    plot_total_balances(total_balances, agent.get_name())
+
+    PnL_generation_plot(balances_dfs, port_number=8050)
+    Probability_generation_plot(probs_dfs, port_number=8051)
+
+    print('end')
