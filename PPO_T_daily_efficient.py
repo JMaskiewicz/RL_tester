@@ -643,7 +643,11 @@ if __name__ == '__main__':
     balances_dfs = {}
 
     # Collecting and learning data in parallel
-    total_rewards, total_balances = collect_and_learn('PPO', rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent, num_workers, num_workers_backtesting, backtesting_frequency=5)
+    total_rewards, total_balances = collect_and_learn('PPO', rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent,
+                      num_workers, num_workers_backtesting, backtesting_frequency=1, val_rolling_datasets=None, test_rolling_datasets=None,
+                      val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None, look_back=look_back, variables=None, provision=provision,
+                      starting_balance=10000, leverage=leverage, reward_function=reward_calculation)
+
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(df)
@@ -655,8 +659,8 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, port_number=8050)
-    Probability_generation_plot(probs_dfs, port_number=8051)
+    PnL_generation_plot(balances_dfs, port_number=8055)
+    Probability_generation_plot(probs_dfs, port_number=8056)
 
     end_time_X = time.time()
     episode_time_X = end_time_X - start_time_X

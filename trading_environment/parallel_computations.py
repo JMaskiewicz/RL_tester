@@ -217,7 +217,7 @@ def environment_worker(agent_type, dfs, shared_queue, max_episodes_per_worker, e
 
 @get_time
 def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, batch_size_for_learning, backtest_results, agent,
-                      num_workers, num_workers_backtesting, backtesting_frequency=1):
+                      num_workers, num_workers_backtesting, backtesting_frequency=1, val_rolling_datasets=None, test_rolling_datasets=None, val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None, look_back=10, variables=None, provision=0.1, starting_balance=1000, leverage=1, reward_function=None):
 
     manager = Manager()
     total_rewards, total_balances, shared_episodes_counter, workers_completed, backtesting_completed, work_event, pause_signals, resume_signals, workers_completed_signal, shared_queue = setup_shared_resources_and_events(
@@ -230,7 +230,7 @@ def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, ba
     manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event,
                                     pause_signals, resume_signals, shared_queue, workers_completed_signal,
                                     shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning,
-                                    backtesting_frequency, max_episodes_per_worker, num_workers)
+                                    backtesting_frequency, max_episodes_per_worker, num_workers, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs)
 
     for worker in workers:
         worker.join()
@@ -241,7 +241,7 @@ def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, ba
 
 @get_time
 @progress_update(interval=10)
-def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4):
+def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4, val_rolling_datasets=None, test_rolling_datasets=None, val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None):
     agent_generation = 0
     try:
         total_experiences = 0
