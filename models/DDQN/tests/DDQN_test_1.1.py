@@ -558,7 +558,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, port_number=8050)
-    Probability_generation_plot(probs_dfs, port_number=8051)
+    PnL_generation_plot(balances_dfs, port_number=8050)  # TODO add here buy and hold and sell and hold as benchmark
+    Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
 
     print('end')
