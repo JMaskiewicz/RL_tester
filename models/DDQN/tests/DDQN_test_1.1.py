@@ -13,22 +13,14 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import random
-import math
-import gym
-from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
-import concurrent.futures
 import torch.nn.functional as F
 from numba import jit
-import math
-import multiprocessing
-from multiprocessing import Process, Queue, Event, Manager
 from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-from data.function.edit import normalize_data, standardize_data, process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
@@ -59,13 +51,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 2  # penalty for wrong action
+        reward *= 2.5  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 100  # penalty for changing position
+        provision_cost = - provision * 10  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 10
+        provision_cost = + provision * 1
     else:
         provision_cost = 0
 
@@ -425,7 +417,7 @@ if __name__ == '__main__':
     leverage = 10
     weight_decay = 0.000005
     l1_lambda = 0.0000005
-    num_episodes = 5000  # 100
+    num_episodes = 10000  # 100
     # Create the environment
 
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position

@@ -1,25 +1,22 @@
 """
-Transformer based PPO agent for trading version 4.2
-
-# this code
-- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
+Transformer based PPO agent for trading version 2.1
 
 # TODO LIST
+- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
 - Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
 - Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
 - Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
 - HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
+- try decaying learning rate
 
 Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
-- higher number of epochs agent would less likely to take a neutral position
+- but the backtesting and the generation of actions is slow ie "while not done:" in the learning function
 
 Reward testing:
 - higher penalty for wrong actions this would make agent more likely to take a neutral position
 - higher number of epochs agent would less likely to take a neutral position
-- premium for holding position agent would less likely to change position
 """
-import cProfile
 import numpy as np
 import pandas as pd
 import time
@@ -39,52 +36,31 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.optim.lr_scheduler import ExponentialLR
-import multiprocessing
-from multiprocessing import Process, Queue, Event, Manager
-from threading import Thread
-import sys
-import time
-from time import perf_counter, sleep
-from functools import wraps
-from typing import Callable, Any
-from numba import jit
-import math
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-from data.function.edit import normalize_data, standardize_data, process_variable
+from data.function.edit import process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
-from functions.utilis import save_model
-import backtest.backtest_functions.functions as BF
-from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
-
-# import environment class
-from trading_environment.environment import Trading_Environment_Basic
+# import backtest.backtest_functions.functions as BF
+from functions.utilis import save_actor_critic_model
 
 """
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
 """
-
-@jit(nopython=True)
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
-    # Calculate the log return
     if previous_close != 0 and current_close != 0:
         log_return = math.log(current_close / previous_close)
     else:
         log_return = 0
 
-    # Calculate the base reward
     reward = log_return * current_position * leverage
 
-    # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 3  # penalty for wrong action
+        reward *= 2
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 - provision) * 10  # penalty for changing position
-    elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = math.log(1 + provision) * 1  # small premium for holding position
+        provision_cost = math.log(1 - provision) * 10
     else:
         provision_cost = 0
 
@@ -92,9 +68,90 @@ def reward_calculation(previous_close, current_close, previous_position, current
     reward += provision_cost
 
     # Scale the reward to enhance its significance for the learning process
-    final_reward = reward * 1000
+    final_reward = reward * 100
 
     return final_reward
+
+def generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    """
+    action_probabilities_list = []
+    best_action_list = []
+    balances = []
+    number_of_trades = 0
+
+    # Preparing the environment
+    agent.actor.eval()
+    agent.critic.eval()
+
+    with torch.no_grad():
+        # Create a backtesting environment
+        env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage)
+
+        observation = env.reset()
+        done = False
+        cumulative_reward = 0
+
+        while not done:  # TODO check if this is correct
+            action_probs = agent.get_action_probabilities(observation, env.current_position)
+            best_action = np.argmax(action_probs)
+
+            if (best_action-1) != env.current_position and abs(best_action-1) == 1:
+                number_of_trades += 1
+
+            observation_, reward, done, info = env.step(best_action)
+            observation = observation_
+            cumulative_reward += reward
+
+            balances.append(env.balance)  # Update balances
+            action_probabilities_list.append(action_probs.tolist())
+            best_action_list.append(best_action-1)
+
+
+    # KPI Calculations
+    buy_and_hold_return = np.log(df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[env.look_back])
+    sell_and_hold_return = -buy_and_hold_return
+
+    returns = pd.Series(balances).pct_change().dropna()
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')  # change 252
+
+    cumulative_returns = (1 + returns).cumprod()
+    peak = cumulative_returns.expanding(min_periods=1).max()
+    drawdown = (cumulative_returns - peak) / peak
+    max_drawdown = drawdown.min()
+
+    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)  # change 252
+    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+
+    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1  # change 252
+    calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
+
+    # Convert the list of action probabilities to a DataFrame
+    probabilities_df = pd.DataFrame(action_probabilities_list, columns=['Short', 'Neutral', 'Long'])
+    action_df = pd.DataFrame(best_action_list, columns=['Action'])
+
+    # Ensure the agent's networks are reverted back to training mode
+    agent.actor.train()
+    agent.critic.train()
+
+    return env.balance, cumulative_reward, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+
+def backtest_wrapper_AC(df, agent, mkf, look_back, variables, provision, initial_balance, leverage,
+                        Trading_Environment_Basic=None):
+    """
+    # TODO add description
+    AC - Actor Critic
+    """
+    return generate_predictions_and_backtest_AC(df, agent, mkf, look_back, variables, provision, initial_balance,
+                                                leverage, Trading_Environment_Basic)
+
+# Set seeds for reproducibility
+torch.manual_seed(0)
+np.random.seed(0)
+random.seed(0)
 
 class PPOMemory:
     def __init__(self, batch_size, device):
@@ -148,7 +205,7 @@ class PPOMemory:
 
 
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 8, static_input_dims=1):
         super(ActorNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -156,18 +213,25 @@ class ActorNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
+                                                 batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 128
+        self.max_position_embeddings = 512
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 512)
-        self.ln1 = nn.LayerNorm(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.ln2 = nn.LayerNorm(256)
-        self.fc3 = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims * 2, 2048)
+        self.ln1 = nn.LayerNorm(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.ln2 = nn.LayerNorm(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.ln3 = nn.LayerNorm(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, n_actions)
 
         self.relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -182,15 +246,18 @@ class ActorNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.relu(self.ln1(self.fc1(combined_features)))
+        x = self.relu(self.ln2(self.fc2(x)))
+        x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
+        x = self.fc6(x)
 
         return self.softmax(x)
 
 
 class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+    def __init__(self, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 8, static_input_dims=1):
         super(CriticNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -198,18 +265,25 @@ class CriticNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
+                                                 batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 128
+        self.max_position_embeddings = 512
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 512)
-        self.ln1 = nn.LayerNorm(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.ln2 = nn.LayerNorm(256)
-        self.fc3 = nn.Linear(256, 1)
+        self.fc1 = nn.Linear(input_dims * 2, 2048)
+        self.ln1 = nn.LayerNorm(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.ln2 = nn.LayerNorm(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.ln3 = nn.LayerNorm(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -222,29 +296,31 @@ class CriticNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.relu(self.ln1(self.fc1(combined_features)))
+        x = self.relu(self.ln2(self.fc2(x)))
+        x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
+        x = self.fc6(x)
 
         return x
 
 
 class Transformer_PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
-                 n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
+                 n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, weight_decay=0.0001, l1_lambda=1e-5,
                  static_input_dims=1, lr_decay_rate=0.99):
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
         self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.gamma = gamma  # Discount factor
-        self.policy_clip = policy_clip  # PPO policy clipping parameter
-        self.n_epochs = n_epochs  # Number of optimization epochs per batch
-        self.gae_lambda = gae_lambda  # Generalized Advantage Estimation lambda
-        self.mini_batch_size = mini_batch_size  # Size of mini-batches for optimization
-        self.entropy_coefficient = entropy_coefficient  # Entropy coefficient for encouraging exploration
-        self.ec_decay_rate = ec_decay_rate
-        self.l1_lambda = l1_lambda  # L1 regularization coefficient
-        self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
+        self.gamma = gamma
+        self.policy_clip = policy_clip
+        self.n_epochs = n_epochs
+        self.gae_lambda = gae_lambda
+        self.mini_batch_size = mini_batch_size
+        self.entropy_coefficient = entropy_coefficient
+        self.l1_lambda = l1_lambda
+        self.lr_decay_rate = lr_decay_rate
 
         # Initialize the actor and critic networks with static input dimensions
         self.actor = ActorNetwork(n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
@@ -252,14 +328,11 @@ class Transformer_PPO_Agent:
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
-        # Learning rate schedulers
         self.actor_scheduler = ExponentialLR(self.actor_optimizer, gamma=self.lr_decay_rate)
         self.critic_scheduler = ExponentialLR(self.critic_optimizer, gamma=self.lr_decay_rate)
 
-        # Memory for storing experiences
         self.memory = PPOMemory(batch_size, self.device)
 
-        # track the generation of the agent
         self.generation = 0
 
     def store_transition(self, state, action, probs, vals, reward, done, static_state):
@@ -267,33 +340,28 @@ class Transformer_PPO_Agent:
         self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
 
     def learn(self):
-        # track the time it takes to learn
         start_time = time.time()
-        print('\n', "-" * 100)
-        # Set the actor and critic networks to training mode
         self.actor.train()
         self.critic.train()
 
-        # Stack the tensors in the memory
         self.memory.stack_tensors()
 
-        # Loop through the optimization epochs
         for _ in range(self.n_epochs):
             # Generating the data for the entire batch, including static states
             state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
             # Convert arrays to tensors and move to the device
-            state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
-            action_arr = action_arr.clone().detach().to(self.device)  # Actions
-            old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
-            vals_arr = vals_arr.clone().detach().to(self.device)  # State values
-            reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
-            dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
+            state_arr = state_arr.clone().detach().to(self.device)
+            action_arr = action_arr.clone().detach().to(self.device)
+            old_prob_arr = old_prob_arr.clone().detach().to(self.device)
+            vals_arr = vals_arr.clone().detach().to(self.device)
+            reward_arr = reward_arr.clone().detach().to(self.device)
+            dones_arr = dones_arr.clone().detach().to(self.device)
             static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
 
             # Compute advantages and discounted rewards
             advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
-            advantages = advantages.clone().detach().to(self.device)  #
+            advantages = advantages.clone().detach().to(self.device)
             discounted_rewards = discounted_rewards.clone().detach().to(self.device)
 
             # Creating mini-batches and training
@@ -301,11 +369,9 @@ class Transformer_PPO_Agent:
             indices = np.arange(num_samples)
             np.random.shuffle(indices)
 
-            # Loop through mini-batches
             for start_idx in range(0, num_samples, self.mini_batch_size):
                 minibatch_indices = indices[start_idx:start_idx + self.mini_batch_size]
 
-                # Convert arrays to tensors and move to the device
                 batch_states = state_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_actions = action_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
@@ -313,19 +379,21 @@ class Transformer_PPO_Agent:
                 batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
                 batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)
 
-                # Zero the gradients before the backward pass
                 self.actor_optimizer.zero_grad()
                 self.critic_optimizer.zero_grad()
 
                 # Calculate actor and critic losses, include static states in forward passes
-                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions,
+                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states,
+                                                                                       batch_actions,
                                                                                        batch_old_probs,
-                                                                                       batch_advantages, batch_returns,
+                                                                                       batch_advantages,
+                                                                                       batch_returns,
                                                                                        batch_static_states)
 
-                # Perform backpropagation and optimization steps for both actor and critic networks
+                # Perform backpropagation and optimization steps
                 actor_loss.backward()
                 self.actor_optimizer.step()
+
                 critic_loss.backward()
                 self.critic_optimizer.step()
 
@@ -338,44 +406,22 @@ class Transformer_PPO_Agent:
 
         # Increment generation of the agent
         self.generation += 1
-
-        # decay entropy coefficient
-        self.entropy_coefficient *= self.ec_decay_rate
-
-        # track the time it takes to learn
         end_time = time.time()
         episode_time = end_time - start_time
-
-        # print the time it takes to learn
         print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
-        print("-" * 100)
 
-    #@jit(nopython=True)
-    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
-                       batch_returns, batch_static_states):
-        # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
+    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns,
+                       batch_static_states):
         if batch_states.dim() == 2:
             batch_states = batch_states.unsqueeze(1)
 
         # Actor loss calculations
         new_probs = self.actor(batch_states, batch_static_states)
-
-        # Calculate the probability ratio and the surrogate loss
         dist = torch.distributions.Categorical(new_probs)
-
-        # Calculate the log probability of the action in the distribution
         new_log_probs = dist.log_prob(batch_actions)
-
-        # Calculate the probability ratio
         prob_ratios = torch.exp(new_log_probs - batch_old_probs)
-
-        # Calculate the surrogate loss
         surr1 = prob_ratios * batch_advantages
-
-        # Clipped surrogate loss
         surr2 = torch.clamp(prob_ratios, 1.0 - self.policy_clip, 1.0 + self.policy_clip) * batch_advantages
-
-        # Actor loss
         actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * dist.entropy().mean()
 
         # Critic loss calculations
@@ -384,46 +430,29 @@ class Transformer_PPO_Agent:
 
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
-    #@jit(nopython=True)
-    def compute_discounted_rewards(self, rewards, values, dones):   # TODO dive into this function
-        # Calculate advantages and discounted returns
+    def compute_discounted_rewards(self, rewards, values, dones):
         n = len(rewards)
-
-        # Create tensors to store advantages and discounted returns
         discounted_rewards = torch.zeros_like(rewards)
         advantages = torch.zeros_like(rewards)
-
-        # Initialize the advantage and the last GAE (Generalized Advantage Estimation) lambda
         last_gae_lam = 0
 
         # Convert 'dones' to a float tensor
         dones = dones.float()
 
         for t in reversed(range(n)):
-            # If the current time step is the last one, the next non-terminal is 0
             if t == n - 1:
                 next_non_terminal = 1.0 - dones[t]
                 next_values = 0
-            # Otherwise, the next non-terminal is 1 - 'dones[t + 1]', and the next value is 'values[t + 1]'
             else:
                 next_non_terminal = 1.0 - dones[t + 1]
                 next_values = values[t + 1]
-
-            # Calculate the Temporal Difference (TD) error
             delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
-
-            # Update the advantages and the last GAE lambda
             last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
-
-            # Update the advantages and the discounted returns
             advantages[t] = last_gae_lam
-
-            # Calculate the discounted return
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
 
-    @torch.no_grad()
     def choose_action(self, observation, static_input):  # TODO check if this is correct
         # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
@@ -459,7 +488,6 @@ class Transformer_PPO_Agent:
         # Convert tensors to Python numbers using .item()
         return action.item(), log_prob.item(), value.item()
 
-    @torch.no_grad()
     def get_action_probabilities(self, observation, static_input):
         # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
@@ -488,7 +516,6 @@ class Transformer_PPO_Agent:
         # Return the action probabilities as a NumPy array
         return action_probs
 
-    @torch.no_grad()
     def choose_best_action(self, observation, static_input):
         # Use the get_action_probabilities method to get the action probabilities for the given observation and static input
         action_probs = self.get_action_probabilities(observation, static_input)
@@ -505,14 +532,91 @@ class Transformer_PPO_Agent:
         return self.__class__.__name__
 
 
-if __name__ == '__main__':
-    # time the execution
-    start_time_X = time.time()
-    # Set seeds for reproducibility
-    torch.manual_seed(0)
-    np.random.seed(0)
-    random.seed(0)
+class Trading_Environment_Basic(gym.Env):
+    def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001,
+                 initial_balance=10000, leverage=1):
+        super(Trading_Environment_Basic, self).__init__()
+        self.df = df.reset_index(drop=True)
+        self.look_back = look_back
+        self.initial_balance = initial_balance
+        self.current_position = 0  # This is a static part of the state
+        self.variables = variables
+        self.tradable_markets = tradable_markets
+        self.provision = provision
+        self.leverage = leverage
 
+        # Define action space: 0 (sell), 1 (hold), 2 (buy)
+        self.action_space = spaces.Discrete(3)
+
+        self.reset()
+
+    def calculate_input_dims(self):
+        num_variables = len(self.variables)  # Number of variables
+        input_dims = num_variables * self.look_back  # Variables times look_back
+        return input_dims
+
+    def reset(self, observation_idx=None, reset_position=True):
+        if observation_idx is not None:
+            self.current_step = observation_idx + self.look_back
+        else:
+            self.current_step = self.look_back
+
+        self.balance = self.initial_balance
+        if reset_position:
+            self.current_position = 0
+        self.done = False
+        return self._next_observation()
+
+    def _next_observation(self):
+        start = max(self.current_step - self.look_back, 0)
+        end = self.current_step
+
+        tasks = [(self.df[variable['variable']].iloc[start:end].values, variable['edit']) for variable in
+                 self.variables]
+
+        # Use ThreadPoolExecutor to parallelize data transformation
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            # Prepare and execute tasks
+            future_to_variable = {executor.submit(process_variable, data, edit_type): (data, edit_type) for data, edit_type in tasks}
+            results = []
+            for future in concurrent.futures.as_completed(future_to_variable):
+                data, edit_type = future_to_variable[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    print('%r generated an exception: %s' % ((data, edit_type), exc))
+                else:
+                    results.append(result)
+
+        # Concatenate results to form the scaled observation array
+        scaled_observation = np.concatenate(results).flatten()
+        return scaled_observation
+
+    def step(self, action):  # TODO: Check if this is correct
+        action_mapping = {0: -1, 1: 0, 2: 1}
+        mapped_action = action_mapping[action]
+
+        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
+        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
+
+        # balance update
+        market_return = next_price / current_price - 1
+        if mapped_action != self.current_position:
+            provision_cost = self.provision * (abs(mapped_action) == 1)
+        else:
+            provision_cost = 0
+
+        self.balance *= (1 + market_return * self.current_position * self.leverage - provision_cost)
+
+        # reward calculation
+        final_reward = reward_calculation(current_price, next_price, self.current_position, mapped_action, self.leverage, self.provision)
+        self.current_position = mapped_action
+        self.current_step += 1
+        self.done = self.current_step >= len(self.df) - 1
+
+        return self._next_observation(), final_reward, self.done, {}
+
+if __name__ == '__main__':
     # Example usage
     # Stock market variables
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
@@ -532,33 +636,31 @@ if __name__ == '__main__':
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
-    add_time_sine_cosine(df, '1W')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+    df['Returns_Close', 'EURUSD'] = (df['Returns_Close', 'EURUSD'] * 10 + 0.5)
+    df['Returns_Close', 'USDJPY'] = (df['Returns_Close', 'USDJPY'] * 10 + 0.5)
+    df['Returns_Close', 'EURJPY'] = (df['Returns_Close', 'EURJPY'] * 10 + 0.5)
+    df['Returns_Close', 'GBPUSD'] = (df['Returns_Close', 'GBPUSD'] * 10 + 0.5)
+
+    # add_time_sine_cosine(df, '1D')
+    # df[("sin_time_1D", "")] = df[("sin_time_1D", "")] / 2 + 0.5
+    # df[("cos_time_1D", "")] = df[("cos_time_1D", "")] / 2 + 0.5
     df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     df = df.dropna()
-    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    # data before 2006 has some missing values ie gaps in the data
+    start_date = '2008-01-01'
+    validation_date = '2022-01-01'
+    test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:'2023-01-01']
-
+    df_test = df[test_date:]
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": None},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "normalize"},
     ]
 
     tradable_markets = 'EURUSD'
@@ -569,162 +671,157 @@ if __name__ == '__main__':
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 2048  # 8192
-    epochs = 10  # 40
-    mini_batch_size = 64  # 256
-    leverage = 10  # 30
-    l1_lambda = 1e-7  # L1 regularization
-    weight_decay = 0.000001  # L2 regularization
-
-    num_episodes = 60
-
-    # Split validation and test datasets into multiple rolling windows
-    # TODO add last year of training data to validation set
-    window_size_2 = '3M'
-    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
-    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
-
-    # Generate index labels for each rolling window dataset
-    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
-    test_labels = generate_index_labels(test_rolling_datasets, 'test')
-    all_labels = val_labels + test_labels
-
-    # Create a DataFrame to hold backtesting results for all rolling windows
-    backtest_results = {}
-
-    # Create an instance of the agent
-    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
+    batch_size = 1024  # 8192
+    epochs = 50  # 40
+    mini_batch_size = 128
+    leverage = 10
+    weight_decay = 0.00001
+    l1_lambda = 1e-7
+    num_episodes = 20  # 100
+    # Create the environment
+    agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.95,  # discount factor for future rewards
-                                  alpha=0.005,  # learning rate for networks (actor and critic) high as its decaying
+                                  gamma=0.9,  # discount factor for future rewards
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
-                                  policy_clip=0.25,  # clip parameter for PPO
-                                  entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.999,  # entropy coefficient decay rate
+                                  policy_clip=0.2,  # clip parameter for PPO
+                                  entropy_coefficient=0.5,  # higher entropy coefficient encourages exploration
                                   batch_size=batch_size,  # size of the memory
                                   n_epochs=epochs,  # number of epochs
                                   mini_batch_size=mini_batch_size,  # size of the mini-batches
                                   weight_decay=weight_decay,  # weight decay
                                   l1_lambda=l1_lambda,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.9999,  # learning rate decay rate
+                                  lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
     total_rewards = []
     episode_durations = []
     total_balances = []
-    episode_probabilities = {'train': [], 'validation': [], 'test': []}
+    probs_dfs = {}
+    balances_dfs = {}
 
-    index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
-    columns = ['Final Balance', 'Dataset Index']
-    backtest_results = pd.DataFrame(index=index, columns=columns)
-
+    # Split validation and test datasets into multiple rolling windows
     window_size_2 = '3M'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
     # Generate index labels for each rolling window dataset
+    def generate_index_labels(rolling_datasets, dataset_type):
+        index_labels = []
+        for dataset in rolling_datasets:
+            last_day = dataset.index[-1].strftime('%Y-%m-%d')
+            label = f"{dataset_type}_{last_day}"
+            index_labels.append(label)
+        return index_labels
+
     val_labels = generate_index_labels(val_rolling_datasets, 'validation')
     test_labels = generate_index_labels(test_rolling_datasets, 'test')
     all_labels = val_labels + test_labels
 
+    # Create a DataFrame to hold backtesting results for all rolling windows
+    columns = ['Agent generation', 'Label', 'Final Balance', 'Number of Trades']
+    backtest_results = pd.DataFrame(columns=columns)
+
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
-
-    probs_dfs = {}
-    balances_dfs = {}
-    backtest_results = {}
-    generation = 0
+    generations_before = 0
 
     for episode in tqdm(range(num_episodes)):
-        start_time = time.time()
-
         window_df = next(dataset_iterator)
-        dataset_index = episode % len(rolling_datasets)
         print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+
         # Create a new environment with the randomly selected window's data
-        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage)
 
         observation = env.reset()
         done = False
-        initial_balance = env.balance
+        cumulative_reward = 0
+        start_time = time.time()
 
-        while not done:
+        while not done:  # TODO check if this is correct
             current_position = env.current_position
             action, prob, val = agent.choose_action(observation, current_position)
             observation_, reward, done, info = env.step(action)
             agent.store_transition(observation, action, prob, val, reward, done, current_position)
             observation = observation_
+            cumulative_reward += reward
 
             # Check if enough data is collected or if the dataset ends
-            if len(agent.memory.states) >= agent.memory.batch_size:
+            if len(agent.memory.states) >= agent.memory.batch_size:  # or done:
                 agent.learn()
                 agent.memory.clear_memory()
 
-            if generation < agent.generation:
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = []
-                    for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'EURUSD', look_back,
-                                                 variables, provision, starting_balance, leverage,
-                                                 Trading_Environment_Basic, reward_calculation)
-                        futures.append((future, label))
+        if agent.generation > generations_before:
+            start_time_2 = time.time()
+            print("Backtesting on training, validation, and test datasets")
 
-                    for future, label in futures:
-                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
-                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
-                         cumulative_returns, balances) = future.result()
-                        result_data = {
-                            'Agent generation': agent.generation,
-                            'Label': label,
-                            'Final Balance': balance,
-                            'Total Reward': total_reward,
-                            'Number of Trades': number_of_trades,
-                            'Buy and Hold Return': buy_and_hold_return,
-                            'Sell and Hold Return': sell_and_hold_return,
-                            'Sharpe Ratio': sharpe_ratio,
-                            'Max Drawdown': max_drawdown,
-                            'Sortino Ratio': sortino_ratio,
-                            'Calmar Ratio': calmar_ratio
-                        }
-                        key = (agent.generation, label)
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = []
+                for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+                    future = executor.submit(backtest_wrapper_AC, df, agent, 'EURUSD', look_back, variables, provision, starting_balance, leverage, Trading_Environment_Basic)
+                    futures.append((future, label))
 
-                        if key not in backtest_results:
-                            backtest_results[key] = []
+                # Process completed tasks and append results to DataFrame
+                for future, label in futures:
+                    balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances = future.result()
+                    result_data = {
+                        'Agent generation': agent.generation,
+                        'Label': label,
+                        'Final Balance': balance,
+                        'Total Reward': total_reward,
+                        'Number of Trades': number_of_trades,
+                        'Buy and Hold Return': buy_and_hold_return,
+                        'Sell and Hold Return': sell_and_hold_return,
+                        'Sharpe Ratio': sharpe_ratio,
+                        'Max Drawdown': max_drawdown,
+                        'Sortino Ratio': sortino_ratio,
+                        'Calmar Ratio': calmar_ratio
+                    }
+                    temp_df = pd.DataFrame([result_data])
+                    backtest_results = pd.concat([backtest_results, temp_df], ignore_index=True)
 
-                        backtest_results[key].append(result_data)
+                    # Store probabilities and balances for plotting
+                    probs_dfs[(agent.generation, label)] = probs_df
+                    balances_dfs[(agent.generation, label)] = balances
 
-                        # Store probabilities and balances for plotting
-                        probs_dfs[(agent.generation, label)] = probs_df
-                        balances_dfs[(agent.generation, label)] = balances
-
-                    generation = agent.generation
-                    print(f"Backtesting completed for {agent.get_name()} generation {generation}")
+            generations_before = agent.generation
+            end_time_2 = time.time()
+            episode_time_2 = end_time_2 - start_time_2
+            print(f"Backtesting completed in {episode_time_2:.2f} seconds")
 
         # results
         end_time = time.time()
         episode_time = end_time - start_time
-        total_rewards.append(env.reward_sum)
+        total_rewards.append(cumulative_reward)
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"\nCompleted learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+        print(f"Completed learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+        print("-----------------------------------\n")
 
-    # TODO repair save_model
-
-    backtest_results = prepare_backtest_results(backtest_results)
-    backtest_results = backtest_results.set_index(['Agent Generation'])
+    # Plotting the results after all episodes
+    backtest_results.set_index('Agent generation', inplace=True)
     print(backtest_results)
 
-    from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
+    # Finding the agent generations with all 'Final Balance' values greater than 10500
+    generations_with_all_balances_above_10500 = backtest_results.groupby(level=0).filter(
+        lambda x: (x['Final Balance'] > 10500).all()).index.unique()
+
+    print(generations_with_all_balances_above_10500)
+
+
+    from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_episode_durations, plot_total_balances
     from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
 
     plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
+    plot_episode_durations(episode_durations, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
     PnL_generation_plot(balances_dfs, port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)
-
     print('end')

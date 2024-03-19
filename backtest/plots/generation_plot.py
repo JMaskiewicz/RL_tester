@@ -15,6 +15,9 @@ def plot_total_rewards(total_rewards, model_name=None, window_size=50):
     plt.figure(figsize=(10, 6))
     plt.plot(total_rewards, label='Total Rewards')
 
+    if len(total_rewards)/2 < window_size:
+        window_size = int(len(total_rewards)/2)
+
     # Calculate and plot moving average
     moving_avg = np.convolve(total_rewards, np.ones(window_size) / window_size, mode='valid')
     plt.plot(np.arange(window_size - 1, len(total_rewards)), moving_avg, color='red', label='Moving Average')
