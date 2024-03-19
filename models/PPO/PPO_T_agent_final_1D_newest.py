@@ -97,8 +97,10 @@ class PPOMemory:
         n_states = len(self.states)
         batch_start = torch.arange(0, n_states, self.batch_size)
         indices = torch.arange(n_states, dtype=torch.int64)
+        indices = indices[torch.randperm(n_states)]  # Shuffle indices
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
+        # Include static states in the generated batches
         return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
 
     def store_memory(self, state, action, probs, vals, reward, done, static_state):
@@ -259,25 +261,24 @@ class Transformer_PPO_Agent:
         # Stack the tensors in the memory
         self.memory.stack_tensors()
 
-        # Generating the data for the entire batch, including static states
-        state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
-
-        # Convert arrays to tensors and move to the device
-        state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
-        action_arr = action_arr.clone().detach().to(self.device)  # Actions
-        old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
-        vals_arr = vals_arr.clone().detach().to(self.device)  # State values
-        reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
-        dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
-        static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
-
-        # Compute advantages and discounted rewards
-        advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
-        advantages = advantages.clone().detach().to(self.device)  #
-        discounted_rewards = discounted_rewards.clone().detach().to(self.device)
-
         # Loop through the optimization epochs
-        for _ in range(self.n_epochs):
+        for _ in range(self.n_epochs):   # TODO this is not correct we are generating random batches and using future values that are
+            # Generating the data for the entire batch, including static states
+            state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
+
+            # Convert arrays to tensors and move to the device
+            state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
+            action_arr = action_arr.clone().detach().to(self.device)  # Actions
+            old_prob_arr = old_prob_arr.clone().detach().to(self.device)  # Old action probabilities
+            vals_arr = vals_arr.clone().detach().to(self.device)  # State values
+            reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
+            dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
+            static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
+
+            # Compute advantages and discounted rewards
+            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
+            advantages = advantages.clone().detach().to(self.device)  #
+            discounted_rewards = discounted_rewards.clone().detach().to(self.device)
 
             # Creating mini-batches and training
             num_samples = len(state_arr)
@@ -301,11 +302,9 @@ class Transformer_PPO_Agent:
                 self.critic_optimizer.zero_grad()
 
                 # Calculate actor and critic losses, include static states in forward passes
-                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states,
-                                                                                       batch_actions,
+                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions,
                                                                                        batch_old_probs,
-                                                                                       batch_advantages,
-                                                                                       batch_returns,
+                                                                                       batch_advantages, batch_returns,
                                                                                        batch_static_states)
 
                 # Perform backpropagation and optimization steps for both actor and critic networks
@@ -561,7 +560,7 @@ if __name__ == '__main__':
     l1_lambda = 1e-7  # L1 regularization
     weight_decay = 0.000001  # L2 regularization
 
-    num_episodes = 1000
+    num_episodes = 1500
 
     # Split validation and test datasets into multiple rolling windows
     # TODO add last year of training data to validation set
@@ -585,14 +584,14 @@ if __name__ == '__main__':
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.95,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.985,  # entropy coefficient decay rate
                                   batch_size=batch_size,  # size of the memory
                                   n_epochs=epochs,  # number of epochs
                                   mini_batch_size=mini_batch_size,  # size of the mini-batches
                                   weight_decay=weight_decay,  # weight decay
                                   l1_lambda=l1_lambda,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.95,  # learning rate decay rate
+                                  lr_decay_rate=0.999,  # learning rate decay rate
                                   )
 
     total_rewards = []
