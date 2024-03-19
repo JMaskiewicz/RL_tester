@@ -106,3 +106,13 @@ class Trading_Environment_Basic(gym.Env):
         self.done = self.current_step >= len(self.df) - 1
 
         return self._next_observation(), final_reward, self.done, {}
+
+    def simulate_step(self, action, alternative_position):
+        action_mapping = {0: -1, 1: 0, 2: 1}
+        mapped_action = action_mapping[action]
+        alternative_position = action_mapping[alternative_position]
+
+        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
+        next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
+
+        return self.reward_function(current_price, next_price, alternative_position, mapped_action, self.leverage, self.provision)
