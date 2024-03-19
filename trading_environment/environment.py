@@ -108,6 +108,9 @@ class Trading_Environment_Basic(gym.Env):
         return self._next_observation(), final_reward, self.done, {}
 
     def simulate_step(self, action, alternative_position):
+        """
+        Simulate a step without changing the environment's state
+        """
         action_mapping = {0: -1, 1: 0, 2: 1}
         mapped_action = action_mapping[action]
         alternative_position = action_mapping[alternative_position]
