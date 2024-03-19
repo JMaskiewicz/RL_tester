@@ -360,8 +360,7 @@ class Transformer_PPO_Agent:
             static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
 
             # Compute advantages and discounted rewards
-            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(),
-                                                                             dones_arr)
+            advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
             advantages = advantages.clone().detach().to(self.device)
             discounted_rewards = discounted_rewards.clone().detach().to(self.device)
 
@@ -384,9 +383,11 @@ class Transformer_PPO_Agent:
                 self.critic_optimizer.zero_grad()
 
                 # Calculate actor and critic losses, include static states in forward passes
-                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states, batch_actions,
+                new_probs, dist_entropy, actor_loss, critic_loss = self.calculate_loss(batch_states,
+                                                                                       batch_actions,
                                                                                        batch_old_probs,
-                                                                                       batch_advantages, batch_returns,
+                                                                                       batch_advantages,
+                                                                                       batch_returns,
                                                                                        batch_static_states)
 
                 # Perform backpropagation and optimization steps

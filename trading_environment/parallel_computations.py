@@ -14,24 +14,13 @@ import math
 
 import backtest.backtest_functions.functions as BF
 from trading_environment.environment import Trading_Environment_Basic
+from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 """
 Description of parallelization of the environment
 Initiate the learning phase as soon as enough experiences are collected, then immediately resume experience gathering after learning while backtesting is performed in parallel for the updated agent. 
 This approach ensures continuous data collection and efficient utilization of computational resources.
 """
-
-def get_time(func: Callable) -> Callable:
-    @wraps(func)
-    def wrapper(*args, **kwargs) -> Any:
-        start_time: float = perf_counter()
-        result: Any = func(*args, **kwargs)
-        end_time: float = perf_counter()
-
-        print(f'"{func.__name__}()" took {end_time - start_time:.3f} seconds to execute')
-        return result
-
-    return wrapper
 
 def print_signal_status(arg1=None, **kwargs):
     def print_status(signals):
@@ -230,7 +219,7 @@ def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, ba
     manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event,
                                     pause_signals, resume_signals, shared_queue, workers_completed_signal,
                                     shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning,
-                                    backtesting_frequency, max_episodes_per_worker, num_workers, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs)
+                                    backtesting_frequency, max_episodes_per_worker, num_workers, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, reward_function)
 
     for worker in workers:
         worker.join()
@@ -241,7 +230,7 @@ def collect_and_learn(agent_type, dfs, max_episodes_per_worker, env_settings, ba
 
 @get_time
 @progress_update(interval=10)
-def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4, val_rolling_datasets=None, test_rolling_datasets=None, val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None):
+def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, backtest_results, backtesting_completed, work_event, pause_signals, resume_signals, shared_queue, workers_completed_signal, shared_episodes_counter, total_rewards, total_balances, batch_size_for_learning, backtesting_frequency, max_episodes_per_worker=10, num_workers=4, val_rolling_datasets=None, test_rolling_datasets=None, val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None, reward_function=None):
     agent_generation = 0
     try:
         total_experiences = 0
@@ -269,7 +258,7 @@ def manage_learning_and_backtesting(agent_type, agent, num_workers_backtesting, 
 
                 if agent.generation > agent_generation and agent.generation % backtesting_frequency == 0:
                     backtesting_completed.clear()
-                    backtest_thread = Thread(target=backtest_in_background, args=(agent_type, agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed))
+                    backtest_thread = Thread(target=backtest_in_background, args=(agent_type, agent, backtest_results, num_workers_backtesting, val_rolling_datasets, test_rolling_datasets, val_labels, test_labels, probs_dfs, balances_dfs, backtesting_completed, reward_function))
                     backtest_thread.start()
                     agent_generation = agent.generation
 

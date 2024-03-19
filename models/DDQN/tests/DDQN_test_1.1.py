@@ -1,11 +1,9 @@
 """
-DDQN 3.1
+DDQN 5.1
 
-# TODO LIST
-- add function to save model
+- my own implementation of the bellman equation
 
-# TODO
-- change bellam equation to own implementation as it should assume keeping the decision for the next step and next step and so on
+
 """
 import numpy as np
 import pandas as pd
@@ -117,14 +115,17 @@ class ReplayBuffer:
         self.action_memory = np.zeros(self.mem_size, dtype=np.int64)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
+        self.alternative_reward_memory = np.zeros((self.mem_size, n_actions), dtype=np.float32)
 
-    def store_transition(self, state, action, reward, state_, done):
+    def store_transition(self, state, action, reward, state_, done, alternative_rewards):
         index = self.mem_cntr % self.mem_size
         self.state_memory[index] = state
         self.new_state_memory[index] = state_
         self.action_memory[index] = action
         self.reward_memory[index] = reward
         self.terminal_memory[index] = done
+        self.alternative_reward_memory[index] = alternative_rewards
+
         self.mem_cntr += 1
 
     def sample_buffer(self, batch_size):
@@ -136,8 +137,9 @@ class ReplayBuffer:
         rewards = self.reward_memory[batch]
         states_ = self.new_state_memory[batch]
         dones = self.terminal_memory[batch]
+        alternative_rewards = self.alternative_reward_memory[batch]
 
-        return states, actions, rewards, states_, dones
+        return states, actions, rewards, states_, dones, alternative_rewards
 
     def clear_memory(self):
         self.mem_cntr = 0
@@ -146,10 +148,11 @@ class ReplayBuffer:
         self.action_memory = np.zeros_like(self.action_memory)
         self.reward_memory = np.zeros_like(self.reward_memory)
         self.terminal_memory = np.zeros_like(self.terminal_memory)
+        self.alternative_reward_memory = np.zeros_like(self.alternative_reward_memory)
 
 
 class DDQN_Agent:
-    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999):
+    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999, premium_gamma=0.5):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -166,6 +169,7 @@ class DDQN_Agent:
         self.weight_decay = weight_decay  # Weight decay
         self.l1_lambda = l1_lambda  # L1 regularization lambda
         self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
+        self.premium_gamma = premium_gamma  # Discount factor for the alternative rewards
         self.action_space = [i for i in range(n_actions)]
 
         # Memory
@@ -187,8 +191,8 @@ class DDQN_Agent:
         self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
         self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
-    def store_transition(self, state, action, reward, state_, done):
-        self.memory.store_transition(state, action, reward, state_, done)
+    def store_transition(self, state, action, reward, state_, done, alternative_rewards):
+        self.memory.store_transition(state, action, reward, state_, done, alternative_rewards)
 
     def replace_target_network(self):
         if self.learn_step_counter % self.replace_target_cnt == 0:
@@ -207,7 +211,7 @@ class DDQN_Agent:
         self.q_policy.train()
 
         # Sample a mini-batch from the replay buffer
-        states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
+        states, actions, rewards, states_, dones, alternative_rewards = self.memory.sample_buffer(self.batch_size)
 
         for epoch in range(self.n_epochs):  # Loop over epochs
             # Calculate the number of mini-batches
@@ -224,6 +228,17 @@ class DDQN_Agent:
                 mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
                 mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
                 mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
+                mini_alternative_rewards = torch.tensor(alternative_rewards[start:end], dtype=torch.float).to(self.device)
+
+                adjusted_rewards = torch.clone(mini_rewards)
+
+                # Calculate the premium for each action based on its alternative rewards
+                for i in range(mini_actions.size(0)):  # Iterate over batch
+                    action = mini_actions[i].item()
+                    # Starting from the next action position, apply discounting to the end
+                    for j in range(action + 1, mini_alternative_rewards.size(1)):
+                        discount_factor = self.premium_gamma ** (j - action)
+                        adjusted_rewards[i] += discount_factor * mini_alternative_rewards[i, j]
 
                 # Zero the gradients of the policy optimizer
                 self.policy_optimizer.zero_grad()
@@ -236,7 +251,7 @@ class DDQN_Agent:
                 # Calculate the maximum Q-values for the next states
                 max_actions = torch.argmax(q_eval, dim=1)
                 q_next[mini_dones] = 0.0  # Set the Q-values of the terminal states to 0
-                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)  # Bellman equation #TODO check how this works change this to own implementation!!!!
+                q_target = adjusted_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
                 # MSE loss
                 loss = F.mse_loss(q_pred, q_target)
@@ -405,12 +420,12 @@ if __name__ == '__main__':
 
     # Training parameters
     batch_size = 2048
-    n_epochs = 1  # 40
-    mini_batch_size = 64
+    n_epochs = 10  # 40
+    mini_batch_size = 256
     leverage = 10
     weight_decay = 0.000005
     l1_lambda = 0.0000005
-    num_episodes = 1000  # 100
+    num_episodes = 5000  # 100
     # Create the environment
 
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
@@ -419,16 +434,17 @@ if __name__ == '__main__':
                        mini_batch_size=mini_batch_size,
                        policy_alpha=0.005,
                        target_alpha=0.0005,
-                       gamma=0,
+                       gamma=0.5,
                        epsilon=1.0,
-                       epsilon_dec=0.99,  # 0.99
+                       epsilon_dec=0.999,  # 0.99
                        epsilon_end=0,
                        mem_size=100000,
                        batch_size=batch_size,
                        replace=10,  # num_episodes // 4
                        weight_decay=weight_decay,
                        l1_lambda=l1_lambda,
-                       lr_decay_rate=0.999)
+                       lr_decay_rate=0.999,
+                       premium_gamma=0.9)
 
     total_rewards = []
     episode_durations = []
@@ -467,14 +483,22 @@ if __name__ == '__main__':
 
         observation = env.reset()
         done = False
+        cumulative_reward = 0
         start_time = time.time()
         initial_balance = env.balance
         observation = np.append(observation, 0)
         while not done:
+            alternative_rewards = np.zeros(len(agent.action_space))
             action = agent.choose_action(observation, env.current_position)
+
+            for hypothetical_action in range(len(agent.action_space)):
+                hypothetical_position = hypothetical_action
+                hypothetical_reward = env.simulate_step(hypothetical_action, hypothetical_position)
+                alternative_rewards[hypothetical_action] = hypothetical_reward
+
             observation_, reward, done, info = env.step(action)
             observation_ = np.append(observation_, env.current_position)
-            agent.store_transition(observation, action, reward, observation_, done)
+            agent.store_transition(observation, action, reward, observation_, done, alternative_rewards)
             observation = observation_
 
             # Check if enough data is collected or if the dataset ends
@@ -516,16 +540,16 @@ if __name__ == '__main__':
                         probs_dfs[(agent.generation, label)] = probs_df
                         balances_dfs[(agent.generation, label)] = balances
                     generation = agent.generation
-                    print(f"Backtesting completed for agent generation {generation}")
+                    print(f"Backtesting completed for {agent.get_name()} generation {generation}")
 
         # results
         end_time = time.time()
         episode_time = end_time - start_time
-        total_rewards.append(env.reward_sum)
+        total_rewards.append(cumulative_reward)
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
+        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
         print("-----------------------------------")
 
     #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model

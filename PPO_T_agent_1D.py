@@ -52,15 +52,14 @@ import math
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
-from data.function.edit import process_variable
+from data.function.edit import normalize_data, standardize_data, process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
-from functions.utilis import prepare_backtest_results, generate_index_labels
-from functions.utilis import save_actor_critic_model
+from functions.utilis import save_model
+import backtest.backtest_functions.functions as BF
+from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 # import environment class
 from trading_environment.environment import Trading_Environment_Basic
-# import parallel collect experience, learn and backtest function
-import trading_environment.parallel_computations as pc
 
 """
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
@@ -157,8 +156,7 @@ class ActorNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
-                                                 batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
         self.max_position_embeddings = 128
@@ -200,8 +198,7 @@ class CriticNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
-                                                 batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
         self.max_position_embeddings = 128
@@ -579,18 +576,7 @@ if __name__ == '__main__':
     l1_lambda = 1e-7  # L1 regularization
     weight_decay = 0.000001  # L2 regularization
 
-    # Number of CPU cores for number of workers
-    num_cores = multiprocessing.cpu_count()
-    print(f"Number of CPU cores: {num_cores}")
-    num_workers = min(max(1, num_cores - 1), 4)  # Number of workers, some needs to left for backtesting
-    num_workers_backtesting = 8  # backtesting is parallelized in same time that gathering data for next generation
-    num_episodes = 40  # need to be divisible by num_workers
-    max_episodes_per_worker = num_episodes // num_workers
-
-    '''
-    Number of workers need to be related to window sizes to have best performance
-    Backtesting is bottleneck now maybe its better to backtest only each 5th generation
-    '''
+    num_episodes = 60
 
     # Split validation and test datasets into multiple rolling windows
     # TODO add last year of training data to validation set
@@ -624,16 +610,23 @@ if __name__ == '__main__':
                                   lr_decay_rate=0.9999,  # learning rate decay rate
                                   )
 
-    # Environment settings
-    env_settings = {
-        'look_back': look_back,
-        'variables': variables,
-        'tradable_markets': tradable_markets,
-        'provision': provision,
-        'initial_balance': starting_balance,
-        'leverage': leverage,
-        'reward_function': reward_calculation
-    }
+    total_rewards = []
+    episode_durations = []
+    total_balances = []
+    episode_probabilities = {'train': [], 'validation': [], 'test': []}
+
+    index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
+    columns = ['Final Balance', 'Dataset Index']
+    backtest_results = pd.DataFrame(index=index, columns=columns)
+
+    window_size_2 = '3M'
+    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
+    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
+
+    # Generate index labels for each rolling window dataset
+    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
+    test_labels = generate_index_labels(test_rolling_datasets, 'test')
+    all_labels = val_labels + test_labels
 
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
@@ -641,16 +634,88 @@ if __name__ == '__main__':
 
     probs_dfs = {}
     balances_dfs = {}
+    backtest_results = {}
+    generation = 0
 
-    # Collecting and learning data in parallel
-    total_rewards, total_balances = pc.collect_and_learn('PPO', rolling_datasets, max_episodes_per_worker, env_settings, batch_size, backtest_results, agent,
-                      num_workers, num_workers_backtesting, backtesting_frequency=1, val_rolling_datasets=None, test_rolling_datasets=None,
-                      val_labels=None, test_labels=None, probs_dfs=None, balances_dfs=None, look_back=look_back, variables=None, provision=provision,
-                      starting_balance=10000, leverage=leverage, reward_function=reward_calculation)
+    for episode in tqdm(range(num_episodes)):
+        start_time = time.time()
+
+        window_df = next(dataset_iterator)
+        dataset_index = episode % len(rolling_datasets)
+        print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        # Create a new environment with the randomly selected window's data
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
+
+        observation = env.reset()
+        done = False
+        initial_balance = env.balance
+
+        while not done:
+            current_position = env.current_position
+            action, prob, val = agent.choose_action(observation, current_position)
+            observation_, reward, done, info = env.step(action)
+            agent.store_transition(observation, action, prob, val, reward, done, current_position)
+            observation = observation_
+
+            # Check if enough data is collected or if the dataset ends
+            if len(agent.memory.states) >= agent.memory.batch_size:
+                agent.learn()
+                agent.memory.clear_memory()
+
+            if generation < agent.generation:
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'EURUSD', look_back,
+                                                 variables, provision, starting_balance, leverage,
+                                                 Trading_Environment_Basic, reward_calculation)
+                        futures.append((future, label))
+
+                    for future, label in futures:
+                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
+                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
+                         cumulative_returns, balances) = future.result()
+                        result_data = {
+                            'Agent generation': agent.generation,
+                            'Label': label,
+                            'Final Balance': balance,
+                            'Total Reward': total_reward,
+                            'Number of Trades': number_of_trades,
+                            'Buy and Hold Return': buy_and_hold_return,
+                            'Sell and Hold Return': sell_and_hold_return,
+                            'Sharpe Ratio': sharpe_ratio,
+                            'Max Drawdown': max_drawdown,
+                            'Sortino Ratio': sortino_ratio,
+                            'Calmar Ratio': calmar_ratio
+                        }
+                        key = (agent.generation, label)
+
+                        if key not in backtest_results:
+                            backtest_results[key] = []
+
+                        backtest_results[key].append(result_data)
+
+                        # Store probabilities and balances for plotting
+                        probs_dfs[(agent.generation, label)] = probs_df
+                        balances_dfs[(agent.generation, label)] = balances
+
+                    generation = agent.generation
+                    print(f"Backtesting completed for {agent.get_name()} generation {generation}")
+
+        # results
+        end_time = time.time()
+        episode_time = end_time - start_time
+        total_rewards.append(env.reward_sum)
+        episode_durations.append(episode_time)
+        total_balances.append(env.balance)
+
+        print(f"\nCompleted learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds")
+
+    # TODO repair save_model
 
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
-    print(df)
+    print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
     from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
@@ -659,10 +724,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, port_number=8055)
-    Probability_generation_plot(probs_dfs, port_number=8056)
+    PnL_generation_plot(balances_dfs, port_number=8050)
+    Probability_generation_plot(probs_dfs, port_number=8051)
 
-    end_time_X = time.time()
-    episode_time_X = end_time_X - start_time_X
-    print(f"full run completed in {episode_time_X:.2f} seconds, END")
-
+    print('end')
