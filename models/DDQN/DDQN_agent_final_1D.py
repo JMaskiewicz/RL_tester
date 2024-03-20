@@ -1,8 +1,10 @@
 """
-DDQN 5.1
+DDQN 3.1
 
-- my own implementation of the bellman equation
+# TODO LIST
+- add function to save model
 
+# TODO
 
 """
 import numpy as np
@@ -13,24 +15,29 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import random
+import math
+import gym
+from gym import spaces
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 import torch.nn.functional as F
 from numba import jit
+import math
+import multiprocessing
+from multiprocessing import Process, Queue, Event, Manager
 from torch.optim.lr_scheduler import ExponentialLR
 
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
+from data.function.edit import normalize_data, standardize_data, process_variable
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
-from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
+from functions.utilis import prepare_backtest_results, generate_index_labels
 
 # import environment class
 from trading_environment.environment import Trading_Environment_Basic
-
-# import benchmark agents
-from backtest.benchmark_agents import Buy_and_hold_Agent, Sell_and_hold_Agent
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
@@ -50,15 +57,17 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * 1000
+    reward = normal_return * current_position * leverage * 100
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 3  # penalty for wrong action
+        reward *= 2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
         provision_cost = - provision * 100  # penalty for changing position
+    elif current_position == previous_position and abs(current_position) == 1:
+        provision_cost = + provision * 10
     else:
         provision_cost = 0
 
@@ -71,7 +80,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
     return final_reward
 
 class DuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=1/4):
+    def __init__(self, input_dims, n_actions, dropout_rate=1/8):
         super(DuelingQNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 512)
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -99,7 +108,7 @@ class DuelingQNetwork(nn.Module):
 
         return q_values
 
-class DQNMemory:
+class ReplayBuffer:
     def __init__(self, max_size, input_shape, n_actions):
         self.mem_size = max_size
         self.mem_cntr = 0
@@ -108,17 +117,14 @@ class DQNMemory:
         self.action_memory = np.zeros(self.mem_size, dtype=np.int64)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
-        self.alternative_reward_memory = np.zeros((self.mem_size, n_actions), dtype=np.float32)
 
-    def store_transition(self, state, action, reward, state_, done, alternative_rewards):
+    def store_transition(self, state, action, reward, state_, done):
         index = self.mem_cntr % self.mem_size
         self.state_memory[index] = state
         self.new_state_memory[index] = state_
         self.action_memory[index] = action
         self.reward_memory[index] = reward
         self.terminal_memory[index] = done
-        self.alternative_reward_memory[index] = alternative_rewards
-
         self.mem_cntr += 1
 
     def sample_buffer(self, batch_size):
@@ -130,9 +136,8 @@ class DQNMemory:
         rewards = self.reward_memory[batch]
         states_ = self.new_state_memory[batch]
         dones = self.terminal_memory[batch]
-        alternative_rewards = self.alternative_reward_memory[batch]
 
-        return states, actions, rewards, states_, dones, alternative_rewards
+        return states, actions, rewards, states_, dones
 
     def clear_memory(self):
         self.mem_cntr = 0
@@ -141,11 +146,10 @@ class DQNMemory:
         self.action_memory = np.zeros_like(self.action_memory)
         self.reward_memory = np.zeros_like(self.reward_memory)
         self.terminal_memory = np.zeros_like(self.terminal_memory)
-        self.alternative_reward_memory = np.zeros_like(self.alternative_reward_memory)
 
 
 class DDQN_Agent:
-    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999, premium_gamma=0.5):
+    def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001, target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000, batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1, lr_decay_rate=0.999):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -162,13 +166,10 @@ class DDQN_Agent:
         self.weight_decay = weight_decay  # Weight decay
         self.l1_lambda = l1_lambda  # L1 regularization lambda
         self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
-        self.premium_gamma = premium_gamma  # Discount factor for the alternative rewards
         self.action_space = [i for i in range(n_actions)]
 
         # Memory
-        self.memory = DQNMemory(mem_size, (input_dims,), n_actions)
-
-        # Policy and target networks
+        self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
         self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
@@ -186,8 +187,8 @@ class DDQN_Agent:
         self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
         self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
-    def store_transition(self, state, action, reward, state_, done, alternative_rewards):
-        self.memory.store_transition(state, action, reward, state_, done, alternative_rewards)
+    def store_transition(self, state, action, reward, state_, done):
+        self.memory.store_transition(state, action, reward, state_, done)
 
     def replace_target_network(self):
         if self.learn_step_counter % self.replace_target_cnt == 0:
@@ -206,7 +207,7 @@ class DDQN_Agent:
         self.q_policy.train()
 
         # Sample a mini-batch from the replay buffer
-        states, actions, rewards, states_, dones, alternative_rewards = self.memory.sample_buffer(self.batch_size)
+        states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
 
         for epoch in range(self.n_epochs):  # Loop over epochs
             # Calculate the number of mini-batches
@@ -223,17 +224,6 @@ class DDQN_Agent:
                 mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
                 mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
                 mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
-                mini_alternative_rewards = torch.tensor(alternative_rewards[start:end], dtype=torch.float).to(self.device)
-
-                adjusted_rewards = torch.clone(mini_rewards)
-
-                # Calculate the premium for each action based on its alternative rewards
-                for i in range(mini_actions.size(0)):  # Iterate over batch
-                    action = mini_actions[i].item()
-                    # Starting from the next action position, apply discounting to the end
-                    for j in range(action + 1, mini_alternative_rewards.size(1)):
-                        discount_factor = self.premium_gamma ** (j - action)
-                        adjusted_rewards[i] += discount_factor * mini_alternative_rewards[i, j]
 
                 # Zero the gradients of the policy optimizer
                 self.policy_optimizer.zero_grad()
@@ -246,7 +236,7 @@ class DDQN_Agent:
                 # Calculate the maximum Q-values for the next states
                 max_actions = torch.argmax(q_eval, dim=1)
                 q_next[mini_dones] = 0.0  # Set the Q-values of the terminal states to 0
-                q_target = adjusted_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
+                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)  # Bellman equation #TODO check how this works change this to own implementation!!!!
 
                 # MSE loss
                 loss = F.mse_loss(q_pred, q_target)
@@ -384,7 +374,7 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2014-01-01'  # worth to keep 2008 as it was a financial crisis
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
     df_train = df[start_date:validation_date]
@@ -414,13 +404,13 @@ if __name__ == '__main__':
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 1024
-    n_epochs = 10  # 40
-    mini_batch_size = 128
+    batch_size = 2048
+    n_epochs = 1  # 40
+    mini_batch_size = 64
     leverage = 10
     weight_decay = 0.000005
     l1_lambda = 0.0000005
-    num_episodes = 50  # 100
+    num_episodes = 1000  # 100
     # Create the environment
 
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
@@ -429,17 +419,16 @@ if __name__ == '__main__':
                        mini_batch_size=mini_batch_size,
                        policy_alpha=0.005,
                        target_alpha=0.0005,
-                       gamma=0.8,
+                       gamma=0,
                        epsilon=1.0,
-                       epsilon_dec=0.98,  # 0.99
+                       epsilon_dec=0.99,  # 0.99
                        epsilon_end=0,
                        mem_size=100000,
                        batch_size=batch_size,
                        replace=10,  # num_episodes // 4
                        weight_decay=weight_decay,
                        l1_lambda=l1_lambda,
-                       lr_decay_rate=0.95,
-                       premium_gamma=0.9)
+                       lr_decay_rate=0.999)
 
     total_rewards = []
     episode_durations = []
@@ -450,7 +439,7 @@ if __name__ == '__main__':
     columns = ['Final Balance', 'Dataset Index']
     backtest_results = pd.DataFrame(index=index, columns=columns)
 
-    window_size_2 = '6M'
+    window_size_2 = '3M'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
@@ -482,17 +471,10 @@ if __name__ == '__main__':
         initial_balance = env.balance
         observation = np.append(observation, 0)
         while not done:
-            alternative_rewards = np.zeros(len(agent.action_space))
             action = agent.choose_action(observation, env.current_position)
-
-            for hypothetical_action in range(len(agent.action_space)):
-                hypothetical_position = hypothetical_action
-                hypothetical_reward = env.simulate_step(hypothetical_action, hypothetical_position)
-                alternative_rewards[hypothetical_action] = hypothetical_reward
-
             observation_, reward, done, info = env.step(action)
             observation_ = np.append(observation_, env.current_position)
-            agent.store_transition(observation, action, reward, observation_, done, alternative_rewards)
+            agent.store_transition(observation, action, reward, observation_, done)
             observation = observation_
 
             # Check if enough data is collected or if the dataset ends
@@ -501,7 +483,7 @@ if __name__ == '__main__':
                 agent.memory.clear_memory()
 
             if generation < agent.generation:
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=8) as executor:
                     futures = []
                     for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
                         future = executor.submit(BF.backtest_wrapper, 'DQN', df, agent, 'EURUSD', look_back,
@@ -510,7 +492,8 @@ if __name__ == '__main__':
                         futures.append((future, label))
 
                     for future, label in futures:
-                        (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
+                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
+                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
                          cumulative_returns, balances) = future.result()
                         result_data = {
                             'Agent generation': agent.generation,
@@ -518,6 +501,8 @@ if __name__ == '__main__':
                             'Final Balance': balance,
                             'Total Reward': total_reward,
                             'Number of Trades': number_of_trades,
+                            'Buy and Hold Return': buy_and_hold_return,
+                            'Sell and Hold Return': sell_and_hold_return,
                             'Sharpe Ratio': sharpe_ratio,
                             'Max Drawdown': max_drawdown,
                             'Sortino Ratio': sortino_ratio,
@@ -527,11 +512,11 @@ if __name__ == '__main__':
                         if key not in backtest_results:
                             backtest_results[key] = []
                         backtest_results[key].append(result_data)
+                        # Store probabilities and balances for plotting
                         probs_dfs[(agent.generation, label)] = probs_df
                         balances_dfs[(agent.generation, label)] = balances
-
                     generation = agent.generation
-                    print(f"Backtesting completed for {agent.get_name()} generation {generation}")
+                    print(f"Backtesting completed for agent generation {generation}")
 
         # results
         end_time = time.time()
@@ -546,40 +531,7 @@ if __name__ == '__main__':
     #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
     #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
 
-    # prepare benchmark results
-    # Instantiate the Buy_and_hold_Agent
-    buy_and_hold_agent = Buy_and_hold_Agent()
-    sell_and_hold_agent = Sell_and_hold_Agent()
-
-    # Run backtesting for both agents
-    bah_results, _, benchmark_BAH = BF.run_backtesting(
-        buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
-        Trading_Environment_Basic, reward_calculation, workers=4)
-
-    sah_results, _, benchmark_SAH = BF.run_backtesting(
-        sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
-        Trading_Environment_Basic, reward_calculation, workers=4)
-
-    bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
-    sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
-
-    # Rename columns for BAH results
-    bah_columns = {col: f"{col}_BAH" for col in bah_results_prepared.columns if col not in ['Agent Generation', 'Agent Name', 'Label']}
-    bah_results_prepared = bah_results_prepared.rename(columns=bah_columns)
-    bah_results_prepared = bah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
-
-    # Rename columns for SAH results
-    sah_columns = {col: f"{col}_SAH" for col in sah_results_prepared.columns if col not in ['Agent Generation', 'Agent Name', 'Label']}
-    sah_results_prepared = sah_results_prepared.rename(columns=sah_columns)
-    sah_results_prepared = sah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
-
-    # Merge BAH and SAH results on 'Label'
-    new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=['Label'], how='outer')
-
-    backtest_results = prepare_backtest_results(backtest_results, agent.get_name())
-    backtest_results = pd.merge(backtest_results, new_backtest_results, on=['Label'], how='outer')
+    backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(backtest_results)
 
@@ -590,7 +542,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8050)
+    PnL_generation_plot(balances_dfs, port_number=8050)  # TODO add here buy and hold and sell and hold as benchmark
     Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
 
     print('end')

@@ -6,6 +6,52 @@ import pandas as pd
 import numpy as np
 import torch
 import math
+from concurrent.futures import ThreadPoolExecutor
+
+from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
+
+@get_time
+def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, currency_pair, look_back,
+                    variables, provision, starting_balance, leverage, Trading_Environment_Class, reward_calculation,
+                    workers=4):
+    backtest_results = {}
+    probs_dfs = {}
+    balances_dfs = {}
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = []
+        for df, label in zip(datasets, labels):
+            future = executor.submit(backtest_wrapper, agent_type, df, agent, currency_pair, look_back,
+                                     variables, provision, starting_balance, leverage,
+                                     Trading_Environment_Class, reward_calculation)
+            futures.append((future, label))
+
+        for future, label in futures:
+            result = future.result()
+            balance, total_reward, number_of_trades = result[:3]
+            probabilities_df, action_df = result[3], result[4]
+            sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio = result[5:9]
+            balances = result[-1]
+            result_data = {
+                'Agent generation': agent.generation,
+                'Agent Type': agent_type,
+                'Label': label,
+                'Final Balance': balance,
+                'Total Reward': total_reward,
+                'Number of Trades': number_of_trades,
+                'Sharpe Ratio': sharpe_ratio,
+                'Max Drawdown': max_drawdown,
+                'Sortino Ratio': sortino_ratio,
+                'Calmar Ratio': calmar_ratio
+            }
+
+            key = (agent.generation, label)
+            backtest_results.setdefault(key, []).append(result_data)
+            probs_dfs[key] = probabilities_df
+            balances_dfs[key] = balances
+
+    return backtest_results, probs_dfs, balances_dfs
+
 
 def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None, reward_function=None):
     """

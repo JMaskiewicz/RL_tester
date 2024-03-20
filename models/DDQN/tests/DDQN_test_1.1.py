@@ -24,10 +24,13 @@ from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
 from functions.utilis import save_model
 import backtest.backtest_functions.functions as BF
-from functions.utilis import prepare_backtest_results, generate_index_labels
+from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 # import environment class
 from trading_environment.environment import Trading_Environment_Basic
+
+# import benchmark agents
+from backtest.benchmark_agents import Buy_and_hold_Agent, Sell_and_hold_Agent
 
 # Set seeds for reproducibility
 torch.manual_seed(0)
@@ -524,7 +527,6 @@ if __name__ == '__main__':
                         if key not in backtest_results:
                             backtest_results[key] = []
                         backtest_results[key].append(result_data)
-                        # Store probabilities and balances for plotting
                         probs_dfs[(agent.generation, label)] = probs_df
                         balances_dfs[(agent.generation, label)] = balances
 
@@ -545,57 +547,36 @@ if __name__ == '__main__':
     #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
 
     # prepare benchmark results
-    class Buy_and_hold_Agent:
-        def __init__(self, action_size=3):
-            self.action_size = action_size
-        def get_action_probabilities(self, observation, current_position):
-            action_probs = np.zeros(self.action_size)
-            action_probs[2] = 1.0
-            return action_probs
-
-
     # Instantiate the Buy_and_hold_Agent
     buy_and_hold_agent = Buy_and_hold_Agent()
+    sell_and_hold_agent = Sell_and_hold_Agent()
 
-    # Prepare new dictionaries to store the results
-    new_backtest_results = {}
-    benchmark_balances = {}
+    # Run backtesting for both agents
+    bah_results, _, benchmark_BAH = BF.run_backtesting(
+        buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
+        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = []
-        for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-            # Use buy_and_hold_agent for backtesting
-            future = executor.submit(BF.backtest_wrapper, 'Benchmark', df, buy_and_hold_agent, 'EURUSD', look_back,
-                                     variables, provision, starting_balance, 10,
-                                     Trading_Environment_Basic, reward_calculation)
-            futures.append((future, label))
+    sah_results, _, benchmark_SAH = BF.run_backtesting(
+        sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
+        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
 
-        for future, label in futures:
-            (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio,
-             calmar_ratio, cumulative_returns, balances) = future.result()
-            result_data = {
-                'Agent Type': 'Buy and Hold',
-                'Label': label,
-                'Final Balance': balance,
-                'Total Reward': total_reward,
-                'Number of Trades': number_of_trades,
-                'Sharpe Ratio': sharpe_ratio,
-                'Max Drawdown': max_drawdown,
-                'Sortino Ratio': sortino_ratio,
-                'Calmar Ratio': calmar_ratio
-            }
-            key = ('Buy and Hold', label)
-            if key not in new_backtest_results:
-                new_backtest_results[key] = []
-            new_backtest_results[key].append(result_data)
-            # Store probabilities and balances for plotting
-            benchmark_balances[key] = balances
+    bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
+    sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
 
-    new_backtest_results = prepare_backtest_results(new_backtest_results, 'Buy and Hold')
-    new_columns = {col: f"{col}_Buy_and_Hold" for col in new_backtest_results.columns if
-                   col not in ['Agent Generation', 'Agent Name', 'Label']}
-    new_backtest_results = new_backtest_results.rename(columns=new_columns)
-    new_backtest_results = new_backtest_results.drop(columns=['Agent Generation', 'Agent Name'])
+    # Rename columns for BAH results
+    bah_columns = {col: f"{col}_BAH" for col in bah_results_prepared.columns if col not in ['Agent Generation', 'Agent Name', 'Label']}
+    bah_results_prepared = bah_results_prepared.rename(columns=bah_columns)
+    bah_results_prepared = bah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
+
+    # Rename columns for SAH results
+    sah_columns = {col: f"{col}_SAH" for col in sah_results_prepared.columns if col not in ['Agent Generation', 'Agent Name', 'Label']}
+    sah_results_prepared = sah_results_prepared.rename(columns=sah_columns)
+    sah_results_prepared = sah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
+
+    # Merge BAH and SAH results on 'Label'
+    new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=['Label'], how='outer')
 
     backtest_results = prepare_backtest_results(backtest_results, agent.get_name())
     backtest_results = pd.merge(backtest_results, new_backtest_results, on=['Label'], how='outer')
@@ -609,7 +590,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, benchmark_balances, port_number=8050)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
 
     print('end')

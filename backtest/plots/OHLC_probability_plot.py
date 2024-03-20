@@ -73,7 +73,7 @@ def OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilitie
     app.run_server(debug=True, port=portnumber)
     webbrowser.open(f"http://127.0.0.1:{portnumber}/")
 
-def PnL_generation_plot(balances_dfs, benchmark_balances=None, port_number=8050):
+def PnL_generation_plot(balances_dfs, alternative_strategies=None, port_number=8050):
     records = []
     for (agent_gen, data_set), balances in balances_dfs.items():
         df = pd.DataFrame({'Balance': balances, 'Time Step': range(len(balances))})
@@ -83,15 +83,18 @@ def PnL_generation_plot(balances_dfs, benchmark_balances=None, port_number=8050)
 
     flattened_df = pd.concat(records)
 
-    if benchmark_balances:
-        benchmark_records = []
-        for (strategy, data_set), balances in benchmark_balances.items():
-            df = pd.DataFrame({'Benchmark Balance': balances, 'Time Step': range(len(balances))})
-            df['DATA_SET'] = data_set  # Ensure this matches the key used in balances_dfs
-            benchmark_records.append(df)
-        benchmark_flattened_df = pd.concat(benchmark_records)
+    benchmark_flattened_dfs = []
+    if alternative_strategies:
+        for strategy in alternative_strategies:
+            benchmark_records = []
+            for (strategy_name, data_set), balances in strategy.items():
+                df = pd.DataFrame({'Benchmark Balance': balances, 'Time Step': range(len(balances))})
+                df['Strategy'] = strategy_name
+                df['DATA_SET'] = data_set  # Ensure this matches the key used in balances_dfs
+                benchmark_records.append(df)
+            benchmark_flattened_dfs.append(pd.concat(benchmark_records))
     else:
-        benchmark_flattened_df = None
+        benchmark_flattened_dfs = [None]
 
     app = dash.Dash(__name__)
 
@@ -124,10 +127,13 @@ def PnL_generation_plot(balances_dfs, benchmark_balances=None, port_number=8050)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df['Balance'], mode='lines', name='Agent Balance'))
 
-        if benchmark_flattened_df is not None:
-            filtered_benchmark_df = benchmark_flattened_df[benchmark_flattened_df['DATA_SET'] == selected_data_set]
-            if not filtered_benchmark_df.empty:
-                fig.add_trace(go.Scatter(x=filtered_benchmark_df['Time Step'], y=filtered_benchmark_df['Benchmark Balance'], mode='lines', name='Benchmark Balance', line=dict(color='red')))
+        for benchmark_flattened_df in benchmark_flattened_dfs:
+            if benchmark_flattened_df is not None:
+                filtered_benchmark_df = benchmark_flattened_df[benchmark_flattened_df['DATA_SET'] == selected_data_set]
+                if not filtered_benchmark_df.empty:
+                    for strategy_name in filtered_benchmark_df['Strategy'].unique():
+                        strategy_df = filtered_benchmark_df[filtered_benchmark_df['Strategy'] == strategy_name]
+                        fig.add_trace(go.Scatter(x=strategy_df['Time Step'], y=strategy_df['Benchmark Balance'], mode='lines', name=f'{strategy_name} Balance'))
 
         fig.update_layout(title='PnL Over Time', xaxis_title='Time Step', yaxis_title='Balance')
         return fig
