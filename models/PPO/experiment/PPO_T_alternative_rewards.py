@@ -91,6 +91,7 @@ class PPOMemory:
         self.rewards = None
         self.dones = None
         self.static_states = None
+        self.alternative_rewards = None
         self.batch_size = batch_size
         self.clear_memory()
         self.device = device
@@ -101,9 +102,9 @@ class PPOMemory:
         indices = torch.arange(n_states, dtype=torch.int64)
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
+        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, self.alternative_rewards, batches
 
-    def store_memory(self, state, action, probs, vals, reward, done, static_state):
+    def store_memory(self, state, action, probs, vals, reward, done, static_state, alternative_reward):
         self.states.append(torch.tensor(state, dtype=torch.float).unsqueeze(0))
         self.actions.append(torch.tensor(action, dtype=torch.long).unsqueeze(0))
         self.probs.append(torch.tensor(probs, dtype=torch.float).unsqueeze(0))
@@ -111,6 +112,7 @@ class PPOMemory:
         self.rewards.append(torch.tensor(reward, dtype=torch.float).unsqueeze(0))
         self.dones.append(torch.tensor(done, dtype=torch.bool).unsqueeze(0))
         self.static_states.append(torch.tensor(static_state, dtype=torch.float).unsqueeze(0))
+        self.alternative_rewards.append(torch.tensor(alternative_reward, dtype=torch.float).unsqueeze(0))
 
     def clear_memory(self):
         self.states = []
@@ -120,6 +122,7 @@ class PPOMemory:
         self.rewards = []
         self.dones = []
         self.static_states = []
+        self.alternative_rewards = []
 
     def stack_tensors(self):
         self.states = torch.cat(self.states, dim=0).to(self.device)
@@ -129,7 +132,7 @@ class PPOMemory:
         self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
         self.dones = torch.cat(self.dones, dim=0).to(self.device)
         self.static_states = torch.cat(self.static_states, dim=0).to(self.device)
-
+        self.alternative_rewards = torch.cat(self.alternative_rewards, dim=0).to(self.device)
 
 class ActorNetwork(nn.Module):
     def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
@@ -229,9 +232,10 @@ class Transformer_PPO_Agent:
         self.ec_decay_rate = ec_decay_rate  # Entropy coefficient decay rate
         self.l1_lambda = l1_lambda  # L1 regularization coefficient
         self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
+        self.n_actions = n_actions  # Number of actions
 
         # Initialize the actor and critic networks with static input dimensions
-        self.actor = ActorNetwork(n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
+        self.actor = ActorNetwork(self.n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
         self.critic = CriticNetwork(input_dims, static_input_dims=static_input_dims).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
@@ -246,9 +250,9 @@ class Transformer_PPO_Agent:
         # track the generation of the agent
         self.generation = 0
 
-    def store_transition(self, state, action, probs, vals, reward, done, static_state):
+    def store_transition(self, state, action, probs, vals, reward, done, static_state, alternative_rewards):
         # Include static_state in the memory storage
-        self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
+        self.memory.store_memory(state, action, probs, vals, reward, done, static_state, alternative_rewards)
 
     def learn(self):
         # track the time it takes to learn
@@ -262,7 +266,7 @@ class Transformer_PPO_Agent:
         self.memory.stack_tensors()
 
         # Generating the data for the entire batch, including static states
-        state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
+        state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, alternative_rewards_arr, batches = self.memory.generate_batches()
 
         # Convert arrays to tensors and move to the device
         state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
@@ -555,7 +559,7 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 1000
+    num_episodes = 100
 
     # Split validation and test datasets into multiple rolling windows
     # TODO add last year of training data to validation set
@@ -581,7 +585,7 @@ if __name__ == '__main__':
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
                                   ec_decay_rate=0.95,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
-                                  n_epochs=50,  # number of epochs
+                                  n_epochs=10,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
@@ -630,10 +634,17 @@ if __name__ == '__main__':
         initial_balance = env.balance
 
         while not done:
+            alternative_rewards = np.zeros(agent.n_actions)
             current_position = env.current_position
             action, prob, val = agent.choose_action(observation, current_position)
+
+            for hypothetical_action in range(agent.n_actions):
+                hypothetical_position = hypothetical_action
+                hypothetical_reward = env.simulate_step(hypothetical_action, hypothetical_position)
+                alternative_rewards[hypothetical_action] = hypothetical_reward
+
             observation_, reward, done, info = env.step(action)
-            agent.store_transition(observation, action, prob, val, reward, done, current_position)
+            agent.store_transition(observation, action, prob, val, reward, done, current_position, alternative_rewards)
             observation = observation_
 
             # Check if enough data is collected or if the dataset ends
