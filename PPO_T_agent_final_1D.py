@@ -43,7 +43,7 @@ import backtest.backtest_functions.functions as BF
 from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 # import environment class
-from trading_environment.environment import Trading_Environment_Basic
+from trading_environment.environment import Trading_Environment_Basic  # TODO add sharpe ration for buy and hold benchmark strategy
 
 """
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
@@ -62,13 +62,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 2  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
         provision_cost = - provision * 10  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 10
+        provision_cost = + provision * 1
     else:
         provision_cost = 0
 
@@ -554,14 +554,8 @@ if __name__ == '__main__':
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 1024  # 8192
-    epochs = 10  # 40
-    mini_batch_size = 64  # 256
     leverage = 10  # 30
-    l1_lambda = 1e-7  # L1 regularization
-    weight_decay = 0.000001  # L2 regularization
-
-    num_episodes = 1000
+    num_episodes = 200
 
     # Split validation and test datasets into multiple rolling windows
     # TODO add last year of training data to validation set
@@ -586,11 +580,11 @@ if __name__ == '__main__':
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
                                   ec_decay_rate=0.95,  # entropy coefficient decay rate
-                                  batch_size=batch_size,  # size of the memory
-                                  n_epochs=epochs,  # number of epochs
-                                  mini_batch_size=mini_batch_size,  # size of the mini-batches
-                                  weight_decay=weight_decay,  # weight decay
-                                  l1_lambda=l1_lambda,  # L1 regularization lambda
+                                  batch_size=1024,  # size of the memory
+                                  n_epochs=10,  # number of epochs
+                                  mini_batch_size=64,  # size of the mini-batches
+                                  weight_decay=0.000001,  # weight decay
+                                  l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
                                   lr_decay_rate=0.95,  # learning rate decay rate
                                   )
@@ -697,7 +691,61 @@ if __name__ == '__main__':
         print(f"\nCompleted learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
 
     # TODO repair save_model
+    # prepare benchmark results
+    class Buy_and_hold_Agent:
+        def __init__(self, action_size=3):
+            self.action_size = action_size
+        def get_action_probabilities(self, observation, current_position):
+            action_probs = np.zeros(self.action_size)
+            action_probs[2] = 1.0
+            return action_probs
 
+
+    # Instantiate the Buy_and_hold_Agent
+    buy_and_hold_agent = Buy_and_hold_Agent()
+
+    # Prepare new dictionaries to store the results
+    new_backtest_results = {}
+    benchmark_balances = {}
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+            # Use buy_and_hold_agent for backtesting
+            future = executor.submit(BF.backtest_wrapper, 'Benchmark', df, buy_and_hold_agent, 'EURUSD', look_back,
+                                     variables, provision, starting_balance, 10,
+                                     Trading_Environment_Basic, reward_calculation)
+            futures.append((future, label))
+
+        for future, label in futures:
+            (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio,
+             calmar_ratio, cumulative_returns, balances) = future.result()
+            result_data = {
+                'Agent Type': 'Buy and Hold',
+                'Label': label,
+                'Final Balance': balance,
+                'Total Reward': total_reward,
+                'Number of Trades': number_of_trades,
+                'Sharpe Ratio': sharpe_ratio,
+                'Max Drawdown': max_drawdown,
+                'Sortino Ratio': sortino_ratio,
+                'Calmar Ratio': calmar_ratio
+            }
+            key = ('Buy and Hold', label)
+            if key not in new_backtest_results:
+                new_backtest_results[key] = []
+            new_backtest_results[key].append(result_data)
+            # Store probabilities and balances for plotting
+            benchmark_balances[key] = balances
+
+    new_backtest_results = prepare_backtest_results(new_backtest_results, 'Buy and Hold')
+    new_columns = {col: f"{col}_Buy_and_Hold" for col in new_backtest_results.columns if
+                   col not in ['Agent Generation', 'Agent Name', 'Label']}
+    new_backtest_results = new_backtest_results.rename(columns=new_columns)
+    new_backtest_results = new_backtest_results.drop(columns=['Agent Generation', 'Agent Name'])
+
+    backtest_results = prepare_backtest_results(backtest_results, agent.get_name())
+    backtest_results = pd.merge(backtest_results, new_backtest_results, on=['Label'], how='outer')
     backtest_results = prepare_backtest_results(backtest_results)
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(backtest_results)
@@ -709,7 +757,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, port_number=8055)  # TODO add here buy and hold and sell and hold as benchmark
+    PnL_generation_plot(balances_dfs, benchmark_balances, port_number=8055)
     Probability_generation_plot(probs_dfs, port_number=8056)  # TODO add here OHLC
 
     print('end')

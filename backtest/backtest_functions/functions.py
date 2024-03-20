@@ -47,9 +47,6 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
             best_action_list.append(best_action-1)
 
     # KPI Calculations
-    buy_and_hold_return = starting_balance * (df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back] - 1)
-    sell_and_hold_return = starting_balance * (1 - df[('Close', mkf)].iloc[-1] / df[('Close', mkf)].iloc[look_back])
-
     returns = pd.Series(balances).pct_change().dropna()
     sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')
 
@@ -75,15 +72,13 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     elif agent_type == 'DQN':
         agent.q_policy.train()
 
-    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, buy_and_hold_return, sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """
     # TODO add description
     """
     return generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic, reward_function)
-
-
 
 
 def make_predictions_AC(df, environment_class, agent, look_back, variables, tradable_markets, provision, starting_balance, leverage):

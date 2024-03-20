@@ -47,17 +47,15 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * leverage * 100
+    reward = normal_return * current_position * 1000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 2.5  # penalty for wrong action
+        reward *= 3  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 10  # penalty for changing position
-    elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 1
+        provision_cost = - provision * 100  # penalty for changing position
     else:
         provision_cost = 0
 
@@ -70,7 +68,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
     return final_reward
 
 class DuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=1/8):
+    def __init__(self, input_dims, n_actions, dropout_rate=1/4):
         super(DuelingQNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 512)
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -98,7 +96,7 @@ class DuelingQNetwork(nn.Module):
 
         return q_values
 
-class ReplayBuffer:
+class DQNMemory:
     def __init__(self, max_size, input_shape, n_actions):
         self.mem_size = max_size
         self.mem_cntr = 0
@@ -165,7 +163,9 @@ class DDQN_Agent:
         self.action_space = [i for i in range(n_actions)]
 
         # Memory
-        self.memory = ReplayBuffer(mem_size, (input_dims,), n_actions)
+        self.memory = DQNMemory(mem_size, (input_dims,), n_actions)
+
+        # Policy and target networks
         self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
@@ -381,7 +381,7 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
+    start_date = '2014-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
     df_train = df[start_date:validation_date]
@@ -411,13 +411,13 @@ if __name__ == '__main__':
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    batch_size = 2048
+    batch_size = 1024
     n_epochs = 10  # 40
-    mini_batch_size = 256
+    mini_batch_size = 128
     leverage = 10
     weight_decay = 0.000005
     l1_lambda = 0.0000005
-    num_episodes = 10000  # 100
+    num_episodes = 50  # 100
     # Create the environment
 
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
@@ -426,16 +426,16 @@ if __name__ == '__main__':
                        mini_batch_size=mini_batch_size,
                        policy_alpha=0.005,
                        target_alpha=0.0005,
-                       gamma=0.5,
+                       gamma=0.8,
                        epsilon=1.0,
-                       epsilon_dec=0.999,  # 0.99
+                       epsilon_dec=0.98,  # 0.99
                        epsilon_end=0,
                        mem_size=100000,
                        batch_size=batch_size,
                        replace=10,  # num_episodes // 4
                        weight_decay=weight_decay,
                        l1_lambda=l1_lambda,
-                       lr_decay_rate=0.999,
+                       lr_decay_rate=0.95,
                        premium_gamma=0.9)
 
     total_rewards = []
@@ -447,7 +447,7 @@ if __name__ == '__main__':
     columns = ['Final Balance', 'Dataset Index']
     backtest_results = pd.DataFrame(index=index, columns=columns)
 
-    window_size_2 = '3M'
+    window_size_2 = '6M'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
@@ -475,7 +475,6 @@ if __name__ == '__main__':
 
         observation = env.reset()
         done = False
-        cumulative_reward = 0
         start_time = time.time()
         initial_balance = env.balance
         observation = np.append(observation, 0)
@@ -499,7 +498,7 @@ if __name__ == '__main__':
                 agent.memory.clear_memory()
 
             if generation < agent.generation:
-                with ThreadPoolExecutor(max_workers=8) as executor:
+                with ThreadPoolExecutor(max_workers=4) as executor:
                     futures = []
                     for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
                         future = executor.submit(BF.backtest_wrapper, 'DQN', df, agent, 'EURUSD', look_back,
@@ -508,8 +507,7 @@ if __name__ == '__main__':
                         futures.append((future, label))
 
                     for future, label in futures:
-                        (balance, total_reward, number_of_trades, probs_df, action_df, buy_and_hold_return,
-                         sell_and_hold_return, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
+                        (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
                          cumulative_returns, balances) = future.result()
                         result_data = {
                             'Agent generation': agent.generation,
@@ -517,8 +515,6 @@ if __name__ == '__main__':
                             'Final Balance': balance,
                             'Total Reward': total_reward,
                             'Number of Trades': number_of_trades,
-                            'Buy and Hold Return': buy_and_hold_return,
-                            'Sell and Hold Return': sell_and_hold_return,
                             'Sharpe Ratio': sharpe_ratio,
                             'Max Drawdown': max_drawdown,
                             'Sortino Ratio': sortino_ratio,
@@ -531,23 +527,78 @@ if __name__ == '__main__':
                         # Store probabilities and balances for plotting
                         probs_dfs[(agent.generation, label)] = probs_df
                         balances_dfs[(agent.generation, label)] = balances
+
                     generation = agent.generation
                     print(f"Backtesting completed for {agent.get_name()} generation {generation}")
 
         # results
         end_time = time.time()
         episode_time = end_time - start_time
-        total_rewards.append(cumulative_reward)
+        total_rewards.append(env.reward_sum)
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {cumulative_reward}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
+        print(f"\nCompleted learning from randomly selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
         print("-----------------------------------")
 
     #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
     #save_model(agent.q_target, base_dir="saved models", sub_dir="DDQN", file_name="q_target")  # TODO repair save_model
 
-    backtest_results = prepare_backtest_results(backtest_results)
+    # prepare benchmark results
+    class Buy_and_hold_Agent:
+        def __init__(self, action_size=3):
+            self.action_size = action_size
+        def get_action_probabilities(self, observation, current_position):
+            action_probs = np.zeros(self.action_size)
+            action_probs[2] = 1.0
+            return action_probs
+
+
+    # Instantiate the Buy_and_hold_Agent
+    buy_and_hold_agent = Buy_and_hold_Agent()
+
+    # Prepare new dictionaries to store the results
+    new_backtest_results = {}
+    benchmark_balances = {}
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
+            # Use buy_and_hold_agent for backtesting
+            future = executor.submit(BF.backtest_wrapper, 'Benchmark', df, buy_and_hold_agent, 'EURUSD', look_back,
+                                     variables, provision, starting_balance, 10,
+                                     Trading_Environment_Basic, reward_calculation)
+            futures.append((future, label))
+
+        for future, label in futures:
+            (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio,
+             calmar_ratio, cumulative_returns, balances) = future.result()
+            result_data = {
+                'Agent Type': 'Buy and Hold',
+                'Label': label,
+                'Final Balance': balance,
+                'Total Reward': total_reward,
+                'Number of Trades': number_of_trades,
+                'Sharpe Ratio': sharpe_ratio,
+                'Max Drawdown': max_drawdown,
+                'Sortino Ratio': sortino_ratio,
+                'Calmar Ratio': calmar_ratio
+            }
+            key = ('Buy and Hold', label)
+            if key not in new_backtest_results:
+                new_backtest_results[key] = []
+            new_backtest_results[key].append(result_data)
+            # Store probabilities and balances for plotting
+            benchmark_balances[key] = balances
+
+    new_backtest_results = prepare_backtest_results(new_backtest_results, 'Buy and Hold')
+    new_columns = {col: f"{col}_Buy_and_Hold" for col in new_backtest_results.columns if
+                   col not in ['Agent Generation', 'Agent Name', 'Label']}
+    new_backtest_results = new_backtest_results.rename(columns=new_columns)
+    new_backtest_results = new_backtest_results.drop(columns=['Agent Generation', 'Agent Name'])
+
+    backtest_results = prepare_backtest_results(backtest_results, agent.get_name())
+    backtest_results = pd.merge(backtest_results, new_backtest_results, on=['Label'], how='outer')
     backtest_results = backtest_results.set_index(['Agent Generation'])
     print(backtest_results)
 
@@ -558,7 +609,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, port_number=8050)  # TODO add here buy and hold and sell and hold as benchmark
+    PnL_generation_plot(balances_dfs, benchmark_balances, port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
 
     print('end')

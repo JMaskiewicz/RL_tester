@@ -73,8 +73,7 @@ def OHLC_probability_plot(df_train, df_validation, df_test, episode_probabilitie
     app.run_server(debug=True, port=portnumber)
     webbrowser.open(f"http://127.0.0.1:{portnumber}/")
 
-def PnL_generation_plot(balances_dfs, port_number=8050):
-    # Transforming your data structure into a suitable format for plotting
+def PnL_generation_plot(balances_dfs, benchmark_balances=None, port_number=8050):
     records = []
     for (agent_gen, data_set), balances in balances_dfs.items():
         df = pd.DataFrame({'Balance': balances, 'Time Step': range(len(balances))})
@@ -84,10 +83,18 @@ def PnL_generation_plot(balances_dfs, port_number=8050):
 
     flattened_df = pd.concat(records)
 
-    # Initialize Dash app
+    if benchmark_balances:
+        benchmark_records = []
+        for (strategy, data_set), balances in benchmark_balances.items():
+            df = pd.DataFrame({'Benchmark Balance': balances, 'Time Step': range(len(balances))})
+            df['DATA_SET'] = data_set  # Ensure this matches the key used in balances_dfs
+            benchmark_records.append(df)
+        benchmark_flattened_df = pd.concat(benchmark_records)
+    else:
+        benchmark_flattened_df = None
+
     app = dash.Dash(__name__)
 
-    # App layout
     app.layout = html.Div([
         html.H4('Interactive PnL Plot'),
         dcc.Dropdown(
@@ -105,7 +112,6 @@ def PnL_generation_plot(balances_dfs, port_number=8050):
         dcc.Graph(id='pnl-plot')
     ])
 
-    # Callback to update the graph based on dropdown selections
     @app.callback(
         Output('pnl-plot', 'figure'),
         [Input('agent-gen-dropdown', 'value'),
@@ -116,12 +122,16 @@ def PnL_generation_plot(balances_dfs, port_number=8050):
             (flattened_df['Agent Generation'] == selected_agent_gen) & (flattened_df['DATA_SET'] == selected_data_set)]
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df['Balance'], mode='lines', name='Balance'))
+        fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df['Balance'], mode='lines', name='Agent Balance'))
+
+        if benchmark_flattened_df is not None:
+            filtered_benchmark_df = benchmark_flattened_df[benchmark_flattened_df['DATA_SET'] == selected_data_set]
+            if not filtered_benchmark_df.empty:
+                fig.add_trace(go.Scatter(x=filtered_benchmark_df['Time Step'], y=filtered_benchmark_df['Benchmark Balance'], mode='lines', name='Benchmark Balance', line=dict(color='red')))
 
         fig.update_layout(title='PnL Over Time', xaxis_title='Time Step', yaxis_title='Balance')
         return fig
 
-    # Open the web browser and then start the server
     def open_browser():
         webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
 
