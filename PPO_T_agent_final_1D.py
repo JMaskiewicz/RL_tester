@@ -64,7 +64,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1  # penalty for wrong action
+        reward *= 2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -557,17 +557,6 @@ if __name__ == '__main__':
     leverage = 10  # 30
     num_episodes = 1000
 
-    # Split validation and test datasets into multiple rolling windows
-    # TODO add last year of training data to validation set
-    window_size_2 = '6M'
-    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
-    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
-
-    # Generate index labels for each rolling window dataset
-    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
-    test_labels = generate_index_labels(test_rolling_datasets, 'test')
-    all_labels = val_labels + test_labels
-
     # Create a DataFrame to hold backtesting results for all rolling windows
     backtest_results = {}
 
@@ -579,9 +568,9 @@ if __name__ == '__main__':
                                   gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.95,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.975,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
-                                  n_epochs=50,  # number of epochs
+                                  n_epochs=20,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
