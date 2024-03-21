@@ -60,11 +60,11 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * leverage * 1000
+    reward = normal_return * current_position * leverage * 100
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1  # penalty for wrong action
+        reward *= 2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -276,10 +276,12 @@ class Transformer_PPO_Agent:
         reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
         dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
         static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
+        alternative_rewards_arr = alternative_rewards_arr.clone().detach().to(self.device)  # Alternative rewards
 
         # Compute advantages and discounted rewards
-        advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr.cpu().numpy(), dones_arr)
-        advantages = advantages.clone().detach().to(self.device)  #
+        advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr,
+                                                                         dones_arr, action_arr, alternative_rewards_arr)
+        advantages = advantages.clone().detach().to(self.device)
         discounted_rewards = discounted_rewards.clone().detach().to(self.device)
 
         # Loop through the optimization epochs
@@ -374,46 +376,48 @@ class Transformer_PPO_Agent:
 
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
-    def compute_discounted_rewards(self, rewards, values, dones):   # TODO dive into this function
-        # Calculate advantages and discounted returns
+    def compute_discounted_rewards(self, rewards, values, dones, actions, alternative_rewards_arr):
+        '''
+        Compute the discounted rewards and advantages using GAE (Generalized Advantage Estimation).
+        My implementation is based on assumption that
+        '''
         n = len(rewards)
-
-        # Create tensors to store advantages and discounted returns
-        discounted_rewards = torch.zeros_like(rewards)
+        num_actions = alternative_rewards_arr.shape[1]
         advantages = torch.zeros_like(rewards)
+        discounted_rewards = torch.zeros_like(rewards)
 
-        # Initialize the advantage and the last GAE (Generalized Advantage Estimation) lambda
-        last_gae_lam = 0
-
-        # Convert 'dones' to a float tensor
+        # Precompute next_values and last_gae_lam for each possible action
+        next_values_per_action = torch.zeros((num_actions, n + 1))
+        last_gae_lam_per_action = torch.zeros((num_actions, n))
         dones = dones.float()
 
-        for t in reversed(range(n)):
-            # If the current time step is the last one, the next non-terminal is 0
-            if t == n - 1:
-                next_non_terminal = 1.0 - dones[t]
-                next_values = 0
-            # Otherwise, the next non-terminal is 1 - 'dones[t + 1]', and the next value is 'values[t + 1]'
-            else:
-                next_non_terminal = 1.0 - dones[t + 1]
-                next_values = values[t + 1]
+        next_values_per_action[:, -1] = 0.0
 
-            # Calculate the Temporal Difference (TD) error
-            delta = rewards[t] + self.gamma * next_values * next_non_terminal - values[t]
+        for action in range(num_actions):
+            for t in reversed(range(n)):
+                if t == n - 1:
+                    next_non_terminal = 1.0 - dones[t]
+                    next_values = 0.0
+                else:
+                    next_non_terminal = 1.0 - dones[t + 1]
+                    next_values = next_values_per_action[action, t + 1]
 
-            # Update the advantages and the last GAE lambda
-            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+                reward_for_action = alternative_rewards_arr[t, action]
+                delta = reward_for_action + self.gamma * next_values * next_non_terminal - values[t]
+                last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam_per_action[action, t]
+                next_values_per_action[action, t] = reward_for_action + self.gamma * next_values * next_non_terminal
+                last_gae_lam_per_action[action, t] = last_gae_lam
 
-            # Update the advantages and the discounted returns
-            advantages[t] = last_gae_lam
-
-            # Calculate the discounted return
+        # Select the precomputed values based on the action taken
+        for t in range(n):
+            action_taken = actions[t].long()
+            advantages[t] = last_gae_lam_per_action[action_taken, t]
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
 
     @torch.no_grad()
-    def choose_action(self, observation, static_input):  # TODO check if this is correct
+    def choose_action(self, observation, static_input):
         # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
@@ -559,18 +563,7 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 100
-
-    # Split validation and test datasets into multiple rolling windows
-    # TODO add last year of training data to validation set
-    window_size_2 = '6M'
-    test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
-    val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
-
-    # Generate index labels for each rolling window dataset
-    val_labels = generate_index_labels(val_rolling_datasets, 'validation')
-    test_labels = generate_index_labels(test_rolling_datasets, 'test')
-    all_labels = val_labels + test_labels
+    num_episodes = 50
 
     # Create a DataFrame to hold backtesting results for all rolling windows
     backtest_results = {}
