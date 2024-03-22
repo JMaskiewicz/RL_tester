@@ -60,11 +60,11 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * leverage * 1000
+    reward = normal_return * current_position * 1000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.5  # penalty for wrong action
+        reward *= 1.25  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -530,62 +530,51 @@ if __name__ == '__main__':
 
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
+    df = load_data_parallel(['SPXUSD'], '1D')
 
     indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
+        {"indicator": "RSI", "mkf": 'SPXUSD', "length": 14},
+        {"indicator": "ATR", "mkf": 'SPXUSD', "length": 24},
+        {"indicator": "MACD", "mkf": 'SPXUSD'},
+        {"indicator": "Stochastic", "mkf": 'SPXUSD'}, ]
 
     return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
+        {"price_type": "Close", "mkf": 'SPXUSD'},
     ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
     add_time_sine_cosine(df, '1W')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+    # df[("RSI_14", 'SPXUSD')] = df[("RSI_14", 'SPXUSD')] / 100
 
     df = df.dropna()
-    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    start_date = '2013-01-01'
+    validation_date = '2022-01-01'
+    test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:'2023-01-01']
+    df_test = df[test_date:]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        {"variable": ("Close", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("RSI_14", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("ATR_24", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("K%", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("D%", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("MACD_Line", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("Signal_Line", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("Returns_Close", 'SPXUSD'), "edit": None},
     ]
 
-    tradable_markets = 'EURUSD'
+    tradable_markets = 'SPXUSD'
     window_size = '1Y'
     starting_balance = 10000
     look_back = 20
-    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.0005  # 0.00025, SP500 spread + provision 0.00025
 
     # Training parameters
-    leverage = 10  # 30
-    num_episodes = 2000
+    leverage = 1  # 30
+    num_episodes = 1500
 
     # Create a DataFrame to hold backtesting results for all rolling windows
     backtest_results = {}
@@ -593,19 +582,19 @@ if __name__ == '__main__':
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor for future rewards
-                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying
+                                  gamma=0.5,  # discount factor of future rewards
+                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying  at least 0.0001
                                   gae_lambda=0.75,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.975,  # entropy coefficient decay rate
-                                  batch_size=1024,  # size of the memory
-                                  n_epochs=40,  # number of epochs
+                                  ec_decay_rate=0.95,  # entropy coefficient decay rate
+                                  batch_size=4096,  # size of the memory
+                                  n_epochs=10,  # number of epochs
                                   mini_batch_size=128,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.95,  # learning rate decay rate
+                                  lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
     total_rewards = []
@@ -671,7 +660,7 @@ if __name__ == '__main__':
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     futures = []
                     for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'EURUSD', look_back,
+                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'SPXUSD', look_back,
                                                  variables, provision, starting_balance, leverage,
                                                  Trading_Environment_Basic, reward_calculation)
                         futures.append((future, label))
@@ -721,12 +710,12 @@ if __name__ == '__main__':
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
         buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
         sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
@@ -759,7 +748,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8058)
-    Probability_generation_plot(probs_dfs, port_number=8059)  # TODO add here OHLC
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8062)
+    Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
 
     print('end')

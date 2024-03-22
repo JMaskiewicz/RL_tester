@@ -14,8 +14,8 @@ Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
 - higher number of epochs agent would less likely to take a neutral position
 
-Reward testing:
-- higher penalty for wrong actions this would make agent more likely to take a neutral position
+Reward testing:tral p
+- higher penalty for wrong actions this would make agent more likely to take a neuosition
 - higher number of epochs agent would less likely to take a neutral position
 - premium for holding position agent would less likely to change position
 """
@@ -64,7 +64,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.5  # penalty for wrong action
+        reward *= 1.25  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -562,18 +562,16 @@ if __name__ == '__main__':
     df_test = df[test_date:'2023-01-01']
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        #{"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        #{"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        #{"variable": ("Close", "GBPUSD"), "edit": "standardize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        #{"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        #{"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     tradable_markets = 'EURUSD'
@@ -593,19 +591,19 @@ if __name__ == '__main__':
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor for future rewards
-                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying
-                                  gae_lambda=0.75,  # lambda for generalized advantage estimation
+                                  gamma=0.5,  # discount factor for future rewards
+                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying
+                                  gae_lambda=0.7,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.975,  # entropy coefficient decay rate
-                                  batch_size=1024,  # size of the memory
-                                  n_epochs=40,  # number of epochs
+                                  ec_decay_rate=0.95,  # entropy coefficient decay rate
+                                  batch_size=4096,  # size of the memory
+                                  n_epochs=10,  # number of epochs
                                   mini_batch_size=128,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.95,  # learning rate decay rate
+                                  lr_decay_rate=0.975,  # learning rate decay rate
                                   )
 
     total_rewards = []
@@ -617,7 +615,7 @@ if __name__ == '__main__':
     columns = ['Final Balance', 'Dataset Index']
     backtest_results = pd.DataFrame(index=index, columns=columns)
 
-    window_size_2 = '6M'
+    window_size_2 = '1Y'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
@@ -759,7 +757,7 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8058)
-    Probability_generation_plot(probs_dfs, port_number=8059)  # TODO add here OHLC
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8062)
+    Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
 
     print('end')
