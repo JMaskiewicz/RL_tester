@@ -64,7 +64,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.25  # penalty for wrong action
+        reward *= 2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -582,15 +582,15 @@ if __name__ == '__main__':
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.5,  # discount factor of future rewards
+                                  gamma=0.74,  # discount factor of future rewards
                                   alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying  at least 0.0001
-                                  gae_lambda=0.75,  # lambda for generalized advantage estimation
+                                  gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
                                   ec_decay_rate=0.95,  # entropy coefficient decay rate
-                                  batch_size=4096,  # size of the memory
-                                  n_epochs=10,  # number of epochs
-                                  mini_batch_size=128,  # size of the mini-batches
+                                  batch_size=1024,  # size of the memory
+                                  n_epochs=40,  # number of epochs
+                                  mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)

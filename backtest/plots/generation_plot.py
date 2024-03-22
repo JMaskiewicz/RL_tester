@@ -39,11 +39,21 @@ def plot_episode_durations(episode_durations, model_name=None):
     plt.show()
 
 
-def plot_total_balances(total_balances, model_name=None):
+def plot_total_balances(total_balances, model_name=None, window_size=50):
     """
     #TODO add description
     """
+    plt.figure(figsize=(10, 6))
     plt.plot(total_balances, color='green')
+
+    if len(total_balances)/2 < window_size:
+        window_size = int(len(total_balances)/2)
+
+    # Calculate and plot moving average
+    moving_avg = np.convolve(total_balances, np.ones(window_size) / window_size, mode='valid')
+    plt.plot(np.arange(window_size - 1, len(total_balances)), moving_avg, color='red', label='Moving Average')
+
+
     plt.title('Total Balance Over Episodes' + model_name if model_name else 'Total Balance Over Episodes')
     plt.xlabel('Episode')
     plt.ylabel('Total Balance')

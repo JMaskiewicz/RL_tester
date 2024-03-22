@@ -3,6 +3,7 @@ DDQN 5.1
 
 - my own implementation of the bellman equation
 
+# TODO add saving the model
 
 """
 import numpy as np
@@ -54,7 +55,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.25  # penalty for wrong action
+        reward *= 2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -338,6 +339,7 @@ class DDQN_Agent:
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
         observation = np.append(observation, current_position)
+
         observation = observation.reshape(1, -1)
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
 
@@ -413,33 +415,30 @@ if __name__ == '__main__':
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
-    # Training parameters
-    batch_size = 1024
+    # Environment parameters
     n_epochs = 10  # 40
-    mini_batch_size = 128
     leverage = 1
-    weight_decay = 0.000005
-    l1_lambda = 0.0000005
-    num_episodes = 100  # 100
-    # Create the environment
+    num_episodes = 2500  # 100
 
+    # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
-                       n_actions=3,
-                       n_epochs=n_epochs,
-                       mini_batch_size=mini_batch_size,
-                       policy_alpha=0.00005,
-                       target_alpha=0.000005,
-                       gamma=0.5,
-                       epsilon=1.0,
-                       epsilon_dec=0.99,  # 0.99
-                       epsilon_end=0,
-                       mem_size=100000,
-                       batch_size=batch_size,
-                       replace=10,  # num_episodes // 4
-                       weight_decay=weight_decay,
-                       l1_lambda=l1_lambda,
-                       lr_decay_rate=0.99,
-                       premium_gamma=0.9)
+                       n_actions=3,  # buy, sell, hold
+                       n_epochs=10,  # number of epochs 10
+                       mini_batch_size=128,  # mini batch size 128
+                       policy_alpha=0.00005,  # learning rate for the policy network
+                       target_alpha=0.000005,  # learning rate for the target network
+                       gamma=0.5,  # discount factor 0.99
+                       epsilon=1.0,  # initial epsilon 1.0
+                       epsilon_dec=0.99,  # epsilon decay rate 0.99
+                       epsilon_end=0,  # minimum epsilon  0
+                       mem_size=100000,   # memory size 100000
+                       batch_size=1024,  # batch size  1024
+                       replace=10,  # replace target network count  10
+                       weight_decay=0.000005,  # Weight decay
+                       l1_lambda=0.0000005,  # L1 regularization lambda
+                       lr_decay_rate=0.99,   # Learning rate decay rate
+                       premium_gamma=0.5,  # Discount factor for the alternative rewards
+                       )
 
     total_rewards = []
     episode_durations = []
@@ -473,8 +472,12 @@ if __name__ == '__main__':
         dataset_index = episode % len(rolling_datasets)
 
         print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+
         # Create a new environment with the randomly selected window's data
-        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage,
+                                        reward_function=reward_calculation)
 
         observation = env.reset()
         done = False
