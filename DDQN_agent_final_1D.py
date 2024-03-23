@@ -400,8 +400,8 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        #{"variable": ("sin_time_1W", ""), "edit": None},
+        #{"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -418,7 +418,7 @@ if __name__ == '__main__':
     # Environment parameters
     n_epochs = 10  # 40
     leverage = 1
-    num_episodes = 2500  # 100
+    num_episodes = 20  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
@@ -513,11 +513,12 @@ if __name__ == '__main__':
                         futures.append((future, label))
 
                     for future, label in futures:
-                        (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio,
-                         cumulative_returns, balances) = future.result()
+                        (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown,
+                         sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum) = future.result()
                         result_data = {
                             'Agent generation': agent.generation,
                             'Label': label,
+                            'Provision_sum': provision_sum,
                             'Final Balance': balance,
                             'Total Reward': total_reward,
                             'Number of Trades': number_of_trades,

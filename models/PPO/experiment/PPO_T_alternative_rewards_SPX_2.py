@@ -14,8 +14,8 @@ Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
 - higher number of epochs agent would less likely to take a neutral position
 
-Reward testing:tral p
-- higher penalty for wrong actions this would make agent more likely to take a neuosition
+Reward testing:
+- higher penalty for wrong actions this would make agent more likely to take a neutral position
 - higher number of epochs agent would less likely to take a neutral position
 - premium for holding position agent would less likely to change position
 """
@@ -92,6 +92,7 @@ class PPOMemory:
         self.dones = None
         self.static_states = None
         self.alternative_rewards = None
+
         self.batch_size = batch_size
         self.clear_memory()
         self.device = device
@@ -135,7 +136,7 @@ class PPOMemory:
         self.alternative_rewards = torch.cat(self.alternative_rewards, dim=0).to(self.device)
 
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 6, static_input_dims=1):
         super(ActorNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -143,18 +144,25 @@ class ActorNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
+                                                 batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 128
+        self.max_position_embeddings = 512
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 512)
-        self.ln1 = nn.LayerNorm(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.ln2 = nn.LayerNorm(256)
-        self.fc3 = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims * 2, 2048)
+        self.ln1 = nn.LayerNorm(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.ln2 = nn.LayerNorm(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.ln3 = nn.LayerNorm(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, n_actions)
 
         self.relu = nn.LeakyReLU()
         self.softmax = nn.Softmax(dim=-1)
@@ -169,15 +177,18 @@ class ActorNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.relu(self.ln1(self.fc1(combined_features)))
+        x = self.relu(self.ln2(self.fc2(x)))
+        x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
+        x = self.fc6(x)
 
         return self.softmax(x)
 
 
 class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+    def __init__(self, input_dims, n_heads=4, n_layers=3, dropout_rate=1 / 6, static_input_dims=1):
         super(CriticNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -185,18 +196,25 @@ class CriticNetwork(nn.Module):
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate,
+                                                 batch_first=True)
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.max_position_embeddings = 128
+        self.max_position_embeddings = 512
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 512)
-        self.ln1 = nn.LayerNorm(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.ln2 = nn.LayerNorm(256)
-        self.fc3 = nn.Linear(256, 1)
+        self.fc1 = nn.Linear(input_dims * 2, 2048)
+        self.ln1 = nn.LayerNorm(2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.ln2 = nn.LayerNorm(1024)
+        self.fc3 = nn.Linear(1024, 512)
+        self.ln3 = nn.LayerNorm(512)
+        self.fc4 = nn.Linear(512, 256)
+        self.ln4 = nn.LayerNorm(256)
+        self.fc5 = nn.Linear(256, 128)
+        self.ln5 = nn.LayerNorm(128)
+        self.fc6 = nn.Linear(128, 1)
         self.relu = nn.LeakyReLU()
 
     def forward(self, dynamic_state, static_state):
@@ -209,9 +227,12 @@ class CriticNetwork(nn.Module):
         static_state_encoded = self.fc_static(static_state.unsqueeze(1))
         combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
 
-        x = self.relu(self.fc1(combined_features))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.relu(self.ln1(self.fc1(combined_features)))
+        x = self.relu(self.ln2(self.fc2(x)))
+        x = self.relu(self.ln3(self.fc3(x)))
+        x = self.relu(self.ln4(self.fc4(x)))
+        x = self.relu(self.ln5(self.fc5(x)))
+        x = self.fc6(x)
 
         return x
 
@@ -403,37 +424,53 @@ class Transformer_PPO_Agent:
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: A tuple containing the computed advantages and discounted rewards tensors.
         '''
+        # Ensure rewards, values, and dones are 1D tensors
         n = len(rewards)
-        num_actions = alternative_rewards_arr.shape[1]
-        advantages = torch.zeros_like(rewards)
-        discounted_rewards = torch.zeros_like(rewards)
+        num_actions = alternative_rewards_arr.shape[1]  # Number of possible actions
+        advantages = torch.zeros_like(rewards)  # Initialize the advantages tensor
+        discounted_rewards = torch.zeros_like(rewards)  # Initialize the discounted rewards tensor
 
         # Precompute next_values and last_gae_lam for each possible action
-        next_values_per_action = torch.zeros((num_actions, n + 1))
-        last_gae_lam_per_action = torch.zeros((num_actions, n))
-        dones = dones.float()
+        next_values_per_action = torch.zeros((num_actions, n + 1))  # Initialize the next values tensor
+        last_gae_lam_per_action = torch.zeros((num_actions, n))  # Initialize the last GAE lambda tensor
+        dones = dones.float()  # Convert dones to float
 
-        next_values_per_action[:, -1] = 0.0
+        next_values_per_action[:, -1] = 0.0  # Set the terminal value to 0
 
+        # Precompute the next values and last GAE lambda for each possible action
         for action in range(num_actions):
             for t in reversed(range(n)):
-                if t == n - 1:
+                if t == n - 1:  # Last timestep
                     next_non_terminal = 1.0 - dones[t]
                     next_values = 0.0
                 else:
-                    next_non_terminal = 1.0 - dones[t + 1]
-                    next_values = next_values_per_action[action, t + 1]
+                    next_non_terminal = 1.0 - dones[t + 1]  # 1 if not terminal, 0 if terminal
+                    next_values = next_values_per_action[action, t + 1]   # Get the next value for the action
 
+                # Get the reward for the action at the current timestep
                 reward_for_action = alternative_rewards_arr[t, action]
+
+                # Calculate the delta and last GAE lambda
                 delta = reward_for_action + self.gamma * next_values * next_non_terminal - values[t]
+
+                # Update the next values and last GAE lambda
                 last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam_per_action[action, t]
+
+                # Store the precomputed values
                 next_values_per_action[action, t] = reward_for_action + self.gamma * next_values * next_non_terminal
+
+                # Store the last GAE lambda
                 last_gae_lam_per_action[action, t] = last_gae_lam
 
         # Select the precomputed values based on the action taken
         for t in range(n):
+            # Get the action taken at the current timestep
             action_taken = actions[t].long()
+
+            # Choose the next value and last GAE lambda based on the action taken
             advantages[t] = last_gae_lam_per_action[action_taken, t]
+
+            # Calculate the discounted rewards
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
@@ -530,56 +567,47 @@ if __name__ == '__main__':
 
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
+    df = load_data_parallel(['SPXUSD'], '1D')
 
     indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
+        {"indicator": "RSI", "mkf": 'SPXUSD', "length": 14},
+        {"indicator": "ATR", "mkf": 'SPXUSD', "length": 24},
+        {"indicator": "MACD", "mkf": 'SPXUSD'},
+        {"indicator": "Stochastic", "mkf": 'SPXUSD'}, ]
 
     return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
+        {"price_type": "Close", "mkf": 'SPXUSD'},
     ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
     add_time_sine_cosine(df, '1W')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+    # df[("RSI_14", 'SPXUSD')] = df[("RSI_14", 'SPXUSD')] / 100
 
     df = df.dropna()
-    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    start_date = '2013-01-01'
+    validation_date = '2022-01-01'
+    test_date = '2023-01-01'
     df_train = df[start_date:validation_date]
     df_validation = df[validation_date:test_date]
-    df_test = df[test_date:'2023-01-01']
+    df_test = df[test_date:]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+        {"variable": ("Close", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("RSI_14", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("ATR_24", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("K%", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("D%", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("MACD_Line", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("Signal_Line", 'SPXUSD'), "edit": "standardize"},
+        {"variable": ("Returns_Close", 'SPXUSD'), "edit": None},
     ]
 
-    tradable_markets = 'EURUSD'
+    tradable_markets = 'SPXUSD'
     window_size = '1Y'
     starting_balance = 10000
     look_back = 20
-    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.00033  # 0.00025, SP500 spread + provision 0.00025
 
     # Training parameters
     leverage = 10  # 30
@@ -720,12 +748,12 @@ if __name__ == '__main__':
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
         buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
         sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
