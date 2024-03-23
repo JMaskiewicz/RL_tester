@@ -611,10 +611,7 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 1500
-
-    # Create a DataFrame to hold backtesting results for all rolling windows
-    backtest_results = {}
+    num_episodes = 1000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
@@ -656,6 +653,8 @@ if __name__ == '__main__':
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
 
+    # Create a DataFrame to hold backtesting results for all rolling windows
+    backtest_results = {}
     probs_dfs = {}
     balances_dfs = {}
     backtest_results = {}
@@ -697,7 +696,7 @@ if __name__ == '__main__':
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     futures = []
                     for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'SPXUSD', look_back,
+                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
                                                  variables, provision, starting_balance, leverage,
                                                  Trading_Environment_Basic, reward_calculation)
                         futures.append((future, label))
@@ -748,12 +747,12 @@ if __name__ == '__main__':
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
         buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
         sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'SPXUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
