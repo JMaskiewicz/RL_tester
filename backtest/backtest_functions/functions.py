@@ -31,11 +31,13 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
             balance, total_reward, number_of_trades = result[:3]
             probabilities_df, action_df = result[3], result[4]
             sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio = result[5:9]
-            balances = result[-1]
+            provision_sum = result[11]
+            balances = result[10]
             result_data = {
                 'Agent generation': agent.generation,
                 'Agent Type': agent_type,
                 'Label': label,
+                'Provision_sum': provision_sum,
                 'Final Balance': balance,
                 'Total Reward': total_reward,
                 'Number of Trades': number_of_trades,
@@ -118,7 +120,7 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     elif agent_type == 'DQN':
         agent.q_policy.train()
 
-    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances
+    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """

@@ -21,6 +21,7 @@ class Trading_Environment_Basic(gym.Env):
         self.leverage = leverage  # Leverage
         self.balance = initial_balance  # Initialize the balance
         self.reward_function = reward_function
+        self.provision_sum = 0  # Initialize the provision sum
 
         # Reset the environment to initialize the state
         self.reset()
@@ -40,6 +41,7 @@ class Trading_Environment_Basic(gym.Env):
         # Reset the balance and reward sum
         self.balance = self.initial_balance
         self.reward_sum = 0
+        self.provision_sum = 0
 
         # Reset the current position
         if reset_position:
@@ -90,11 +92,13 @@ class Trading_Environment_Basic(gym.Env):
         # Provision cost calculation if the position has changed
         if mapped_action != self.current_position:
             provision_cost = self.provision * (abs(mapped_action) == 1)
+            self.balance += (- provision_cost) * self.initial_balance * self.leverage
+            self.provision_sum += (- provision_cost) * self.initial_balance * self.leverage
         else:
             provision_cost = 0
 
         # Update the balance
-        self.balance = self.balance + (market_return * mapped_action - provision_cost) * self.initial_balance * self.leverage
+        self.balance += (market_return * mapped_action) * self.initial_balance * self.leverage
 
         # reward calculation with reward function on the top of the file (reward_calculation)
         final_reward = self.reward_function(current_price, next_price, self.current_position, mapped_action, self.leverage, self.provision)

@@ -39,6 +39,7 @@ def prepare_backtest_results(backtest_results, agent_name):
     sortino_ratios = []
     calmar_ratios = []
     agent_names = []
+    provision_sums = []
 
     # Iterating over each record in the dataset
     for (agent_gen, label), metrics in backtest_results.items():
@@ -53,12 +54,14 @@ def prepare_backtest_results(backtest_results, agent_name):
             max_drawdowns.append(metric['Max Drawdown'])
             sortino_ratios.append(metric['Sortino Ratio'])
             calmar_ratios.append(metric['Calmar Ratio'])
+            provision_sums.append(metric['Provision_sum'])
 
     # Creating a DataFrame from the lists
     df = pd.DataFrame({
         'Agent Generation': agent_generations,
         'Agent Name': agent_name,
         'Label': labels,
+        'Provision Sum': provision_sums,
         'Final Balance': final_balances,
         'Total Reward': total_rewards,
         'Number of Trades': number_of_trades,
