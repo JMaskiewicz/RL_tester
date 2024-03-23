@@ -6,6 +6,7 @@ import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 from data.function.edit import normalize_data, standardize_data, process_variable
 
+# Trading environment class for discrete actions
 class Trading_Environment_Basic(gym.Env):
     def __init__(self, df, look_back=20, variables=None, tradable_markets='EURUSD', provision=0.0001,
                  initial_balance=10000, leverage=1, reward_function=None):
@@ -79,8 +80,7 @@ class Trading_Environment_Basic(gym.Env):
         return scaled_observation
 
     def step(self, action):
-        action_mapping = {0: -1, 1: 0, 2: 1}  # best mapping ever :)
-        mapped_action = action_mapping[action]  # Map the action to a position change
+        action = action - 1  # convert action to -1, 0, 1
 
         # Get the current price and the price of the next time step for the reward calculation and PnL
         current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
@@ -90,20 +90,20 @@ class Trading_Environment_Basic(gym.Env):
         market_return = next_price / current_price - 1
 
         # Provision cost calculation if the position has changed
-        if mapped_action != self.current_position:
-            provision_cost = self.provision * (abs(mapped_action) == 1)
+        if action != self.current_position:
+            provision_cost = self.provision * (abs(action) == 1)
             self.balance += (- provision_cost) * self.initial_balance * self.leverage
             self.provision_sum += (- provision_cost) * self.initial_balance * self.leverage
         else:
             provision_cost = 0
 
         # Update the balance
-        self.balance += (market_return * mapped_action) * self.initial_balance * self.leverage
+        self.balance += (market_return * action) * self.initial_balance * self.leverage
 
         # reward calculation with reward function on the top of the file (reward_calculation)
-        final_reward = self.reward_function(current_price, next_price, self.current_position, mapped_action, self.leverage, self.provision)
+        final_reward = self.reward_function(current_price, next_price, self.current_position, action, self.leverage, self.provision)
         self.reward_sum += final_reward  # Update the reward sum
-        self.current_position = mapped_action  # Update the current position
+        self.current_position = action  # Update the current position
         self.current_step += 1  # Increment the current step
 
         # Check if the episode is done
@@ -116,10 +116,10 @@ class Trading_Environment_Basic(gym.Env):
         Simulate a step without changing the environment's state
         """
         action_mapping = {0: -1, 1: 0, 2: 1}
-        mapped_action = action_mapping[action]
+        action = action_mapping[action]
         alternative_position = action_mapping[alternative_position]
 
         current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
         next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
-        return self.reward_function(current_price, next_price, alternative_position, mapped_action, self.leverage, self.provision)
+        return self.reward_function(current_price, next_price, alternative_position, action, self.leverage, self.provision)
