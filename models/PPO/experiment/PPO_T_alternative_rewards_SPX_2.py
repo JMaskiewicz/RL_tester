@@ -64,11 +64,11 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1  # penalty for wrong action
+        reward *= 1.25  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 1000  # penalty for changing position
+        provision_cost = - provision * 10000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
@@ -611,7 +611,7 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 1500
+    num_episodes = 2000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
@@ -621,14 +621,14 @@ if __name__ == '__main__':
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.98,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.95,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
                                   n_epochs=10,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.995,  # learning rate decay rate
+                                  lr_decay_rate=0.9999,  # learning rate decay rate
                                   )
 
     total_rewards = []
@@ -782,7 +782,8 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations
+
 
     plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
@@ -790,5 +791,6 @@ if __name__ == '__main__':
 
     PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8062)
     Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
+    #PnL_generations(backtest_results, port_number=8063)
 
     print('end')

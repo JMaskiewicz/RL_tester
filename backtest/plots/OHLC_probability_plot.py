@@ -199,3 +199,51 @@ def Probability_generation_plot(probs_dfs, port_number=8050):
 
     Timer(1, open_browser).start()
     app.run_server(debug=True, port=port_number)
+
+def PnL_generations(backtest_results, port_number=8050):
+    app = dash.Dash(__name__)
+
+    balance_variations = [col for col in backtest_results.columns if 'Final Balance' in col]
+
+    app.layout = html.Div([
+        html.H4('Interactive Balance Comparison Plot'),
+        dcc.Dropdown(
+            id='label-dropdown',
+            options=[{'label': label, 'value': label} for label in backtest_results['Label'].unique()],
+            value=backtest_results['Label'].unique()[0],
+            clearable=False
+        ),
+        dcc.Graph(id='balance-comparison-plot')
+    ])
+
+    @app.callback(
+        Output('balance-comparison-plot', 'figure'),
+        [Input('label-dropdown', 'value')]
+    )
+    def update_graph(selected_label):
+        filtered_df = backtest_results[backtest_results['Label'] == selected_label]
+
+        fig = go.Figure()
+
+        for variation in balance_variations:
+            fig.add_trace(go.Scatter(
+                x=filtered_df.index,
+                y=filtered_df[variation],
+                mode='lines',
+                name=variation
+            ))
+
+        fig.update_layout(
+            title=f'Balance Comparison for Label: {selected_label}',
+            xaxis_title='Agent Generation',
+            yaxis_title='Balance',
+            xaxis=dict(type='category') # Set the x-axis to category if 'Agent Generation' is not a numeric type
+        )
+
+        return fig
+
+    def open_browser():
+        webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
+
+    Timer(1, open_browser).start()
+    app.run_server(debug=False, port=port_number)
