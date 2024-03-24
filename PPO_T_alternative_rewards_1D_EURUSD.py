@@ -43,7 +43,7 @@ import backtest.backtest_functions.functions as BF
 from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 # import environment class
-from trading_environment.environment import Trading_Environment_Basic  # TODO add sharpe ration for buy and hold benchmark strategy
+from trading_environment.environment import Trading_Environment_Basic
 
 # import benchmark agents
 from backtest.benchmark_agents import Buy_and_hold_Agent, Sell_and_hold_Agent

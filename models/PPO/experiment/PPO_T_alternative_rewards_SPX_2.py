@@ -43,7 +43,7 @@ import backtest.backtest_functions.functions as BF
 from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 # import environment class
-from trading_environment.environment import Trading_Environment_Basic  # TODO add sharpe ration for buy and hold benchmark strategy
+from trading_environment.environment import Trading_Environment_Basic
 
 # import benchmark agents
 from backtest.benchmark_agents import Buy_and_hold_Agent, Sell_and_hold_Agent
@@ -738,8 +738,12 @@ if __name__ == '__main__':
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
-        print(f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
+        print(
+            f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
+        print(
+            f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (
+            window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[look_back])
+            / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
         # TODO do this as cached function with benchmark agents and df as input
 
 
