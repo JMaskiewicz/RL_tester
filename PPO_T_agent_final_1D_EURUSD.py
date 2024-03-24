@@ -600,9 +600,7 @@ if __name__ == '__main__':
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
 
-    probs_dfs = {}
-    balances_dfs = {}
-    backtest_results = {}
+    backtest_results, probs_dfs, balances_dfs = {}, {}, {}
     generation = 0
 
     for episode in tqdm(range(num_episodes)):

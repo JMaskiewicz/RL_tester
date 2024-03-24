@@ -597,7 +597,7 @@ if __name__ == '__main__':
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.999,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
                                   n_epochs=20,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
@@ -630,10 +630,7 @@ if __name__ == '__main__':
     dataset_iterator = cycle(rolling_datasets)
 
     # Create a DataFrame to hold backtesting results for all rolling windows
-    backtest_results = {}
-    probs_dfs = {}
-    balances_dfs = {}
-    backtest_results = {}
+    backtest_results, probs_dfs, balances_dfs = {}, {}, {}
     generation = 0
 
     for episode in tqdm(range(num_episodes)):
@@ -641,7 +638,7 @@ if __name__ == '__main__':
 
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
-        print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
         # Create a new environment with the randomly selected window's data
         env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
 
@@ -713,7 +710,11 @@ if __name__ == '__main__':
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"\nCompleted learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
+        print(
+            f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
+        print(f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (
+                    window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[
+                look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
 
     # TODO repair save_model
     # prepare benchmark results

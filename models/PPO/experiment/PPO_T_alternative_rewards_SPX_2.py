@@ -64,13 +64,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.25  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 10000  # penalty for changing position
+        provision_cost = - provision * 1000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 10
+        provision_cost = + provision * 0
     else:
         provision_cost = 0
 
@@ -611,24 +611,24 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 2000
+    num_episodes = 1500
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.8,  # discount factor of future rewards
-                                  alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gamma=0.66,  # discount factor of future rewards
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.999,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.98,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
-                                  n_epochs=25,  # number of epochs
+                                  n_epochs=10,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.999,  # learning rate decay rate
+                                  lr_decay_rate=0.995,  # learning rate decay rate
                                   )
 
     total_rewards = []
@@ -649,15 +649,16 @@ if __name__ == '__main__':
     test_labels = generate_index_labels(test_rolling_datasets, 'test')
     all_labels = val_labels + test_labels
 
+    # prepare benchmark results
+    buy_and_hold_agent = Buy_and_hold_Agent()
+    sell_and_hold_agent = Sell_and_hold_Agent()
+
     # Rolling DF
     rolling_datasets = rolling_window_datasets(df_train, window_size=window_size, look_back=look_back)
     dataset_iterator = cycle(rolling_datasets)
 
     # Create a DataFrame to hold backtesting results for all rolling windows
-    backtest_results = {}
-    probs_dfs = {}
-    balances_dfs = {}
-    backtest_results = {}
+    backtest_results, probs_dfs, balances_dfs = {}, {}, {}
     generation = 0
 
     for episode in tqdm(range(num_episodes)):
@@ -665,7 +666,7 @@ if __name__ == '__main__':
 
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
-        print(f"Episode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
         # Create a new environment with the randomly selected window's data
         env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
 
@@ -737,12 +738,10 @@ if __name__ == '__main__':
         episode_durations.append(episode_time)
         total_balances.append(env.balance)
 
-        print(f"\nCompleted learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
+        print(f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, current Entropy Coefficient: {agent.entropy_coefficient:.2f}")
+        print(f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
+        # TODO do this as cached function with benchmark agents and df as input
 
-    # TODO repair save_model
-    # prepare benchmark results
-    buy_and_hold_agent = Buy_and_hold_Agent()
-    sell_and_hold_agent = Sell_and_hold_Agent()
 
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
