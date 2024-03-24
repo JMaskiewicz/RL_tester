@@ -721,6 +721,7 @@ if __name__ == '__main__':
         print(f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (
                     window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[
                 look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
+        # TODO do this as cached function with benchmark agents and df as input
 
     # TODO repair save_model
     # prepare benchmark results
