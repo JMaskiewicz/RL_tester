@@ -493,6 +493,7 @@ class Transformer_PPO_Agent:
 if __name__ == '__main__':
     # time the execution
     start_time_X = time.time()
+
     # Set seeds for reproducibility
     torch.manual_seed(0)
     np.random.seed(0)
@@ -527,9 +528,7 @@ if __name__ == '__main__':
     start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
-    df_train = df[start_date:validation_date]
-    df_validation = df[validation_date:test_date]
-    df_test = df[test_date:'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
@@ -578,9 +577,7 @@ if __name__ == '__main__':
                                   lr_decay_rate=0.95,  # learning rate decay rate
                                   )
 
-    total_rewards = []
-    episode_durations = []
-    total_balances = []
+    total_rewards, episode_durations, total_balances = [], [], []
     episode_probabilities = {'train': [], 'validation': [], 'test': []}
 
     index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
@@ -601,6 +598,8 @@ if __name__ == '__main__':
     dataset_iterator = cycle(rolling_datasets)
 
     backtest_results, probs_dfs, balances_dfs = {}, {}, {}
+
+    # Initialize the agent generation
     generation = 0
 
     for episode in tqdm(range(num_episodes)):
@@ -682,45 +681,42 @@ if __name__ == '__main__':
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
         buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
         sell_and_hold_agent, 'SAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
-        BF.backtest_wrapper, 'EURUSD', look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
     sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
 
-    # Rename columns for BAH results
-    bah_columns = {col: f"{col}_BAH" for col in bah_results_prepared.columns if
-                   col not in ['Agent Generation', 'Agent Name', 'Label']}
-    bah_results_prepared = bah_results_prepared.rename(columns=bah_columns)
-    bah_results_prepared = bah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
-
-    # Rename columns for SAH results
-    sah_columns = {col: f"{col}_SAH" for col in sah_results_prepared.columns if
-                   col not in ['Agent Generation', 'Agent Name', 'Label']}
-    sah_results_prepared = sah_results_prepared.rename(columns=sah_columns)
-    sah_results_prepared = sah_results_prepared.drop(columns=['Agent Generation', 'Agent Name'])
+    sah_results_prepared = sah_results_prepared.drop(('', 'Agent Generation'), axis=1)  # drop the agent generation column
+    bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'), axis=1)  # drop the agent generation column
 
     # Merge BAH and SAH results on 'Label'
-    new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=['Label'], how='outer')
+    new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=[('', 'Label')], how='outer')
 
     backtest_results = prepare_backtest_results(backtest_results, agent.get_name())
-    backtest_results = pd.merge(backtest_results, new_backtest_results, on=['Label'], how='outer')
-    backtest_results = backtest_results.set_index(['Agent Generation'])
+    backtest_results = pd.merge(backtest_results, new_backtest_results, on=[('', 'Label')], how='outer')
+    backtest_results = backtest_results.set_index([('', 'Agent Generation')])
+
+    label_series = backtest_results[('', 'Label')]
+    backtest_results = backtest_results.drop(('', 'Label'), axis=1)
+    backtest_results['Label'] = label_series
+
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations
 
-    plot_results(backtest_results, ['Final Balance', 'Number of Trades', 'Total Reward'], agent.get_name())
+    plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(),'Number of Trades'), (agent.get_name(),'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8055)
-    Probability_generation_plot(probs_dfs, port_number=8056)  # TODO add here OHLC
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8053)
+    Probability_generation_plot(probs_dfs, port_number=8054)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8055)
 
     print('end')

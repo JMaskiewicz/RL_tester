@@ -70,6 +70,10 @@ def prepare_backtest_results(backtest_results, agent_name):
         'Sortino Ratio': sortino_ratios,
         'Calmar Ratio': calmar_ratios,
     })
+
+    columns = [(df['Agent Name'].iloc[0], col) if col not in ['Label', 'Agent Generation'] else ('', col) for col in df.columns]
+    multi_index = pd.MultiIndex.from_tuples(columns)
+    df.columns = multi_index
     return df
 
 def get_repository_root_path():

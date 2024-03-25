@@ -200,17 +200,19 @@ def Probability_generation_plot(probs_dfs, port_number=8050):
     Timer(1, open_browser).start()
     app.run_server(debug=True, port=port_number)
 
+
 def PnL_generations(backtest_results, port_number=8050):
     app = dash.Dash(__name__)
 
-    balance_variations = [col for col in backtest_results.columns if 'Final Balance' in col]
+    # Extract the unique labels
+    unique_labels = backtest_results['Label'].unique()
 
     app.layout = html.Div([
         html.H4('Interactive Balance Comparison Plot'),
         dcc.Dropdown(
             id='label-dropdown',
-            options=[{'label': label, 'value': label} for label in backtest_results['Label'].unique()],
-            value=backtest_results['Label'].unique()[0],
+            options=[{'label': label, 'value': label} for label in unique_labels],
+            value=unique_labels[0],  # Set default value to the first label
             clearable=False
         ),
         dcc.Graph(id='balance-comparison-plot')
@@ -221,23 +223,25 @@ def PnL_generations(backtest_results, port_number=8050):
         [Input('label-dropdown', 'value')]
     )
     def update_graph(selected_label):
-        filtered_df = backtest_results[backtest_results['Label'] == selected_label]
+        filtered_df = backtest_results[backtest_results[('Label', '')] == selected_label]
 
         fig = go.Figure()
 
-        for variation in balance_variations:
+        for strategy in [strat for strat in backtest_results.columns.get_level_values(0).unique() if
+                         strat not in ['', 'Label']]:
             fig.add_trace(go.Scatter(
                 x=filtered_df.index,
-                y=filtered_df[variation],
-                mode='lines',
-                name=variation
+                y=filtered_df[(strategy, 'Final Balance')],  # Ensure this matches MultiIndex structure
+                mode='lines+markers',
+                name=strategy
             ))
 
         fig.update_layout(
             title=f'Balance Comparison for Label: {selected_label}',
             xaxis_title='Agent Generation',
             yaxis_title='Balance',
-            xaxis=dict(type='category') # Set the x-axis to category if 'Agent Generation' is not a numeric type
+            legend_title="Strategy",
+            xaxis=dict(type='category')
         )
 
         return fig
