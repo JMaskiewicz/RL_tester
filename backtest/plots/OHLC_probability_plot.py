@@ -251,3 +251,54 @@ def PnL_generations(backtest_results, port_number=8050):
 
     Timer(1, open_browser).start()
     app.run_server(debug=False, port=port_number)
+
+def Reward_generations(backtest_results, port_number=8051):  # Consider using a different port if running simultaneously
+    app = dash.Dash(__name__, suppress_callback_exceptions=True)
+
+    # Extract the unique labels
+    unique_labels = backtest_results[('Label', '')].unique()  # Assuming 'Label' extraction is correct
+
+    app.layout = html.Div([
+        html.H4('Interactive Reward Comparison Plot'),
+        dcc.Dropdown(
+            id='label-dropdown-reward',  # Ensure unique ID if running simultaneously with PnL_generations
+            options=[{'label': label, 'value': label} for label in unique_labels],
+            value=unique_labels[0],  # Default value
+            clearable=False
+        ),
+        dcc.Graph(id='reward-comparison-plot')  # Corrected ID
+    ])
+
+    @app.callback(
+        Output('reward-comparison-plot', 'figure'),  # Ensure this matches dcc.Graph ID
+        [Input('label-dropdown-reward', 'value')]  # Match updated ID
+    )
+    def update_graph(selected_label):
+        filtered_df = backtest_results[backtest_results[('Label', '')] == selected_label]
+
+        fig = go.Figure()
+
+        for strategy in [strat for strat in backtest_results.columns.get_level_values(0).unique() if
+                         strat not in ['', 'Label']]:
+            fig.add_trace(go.Scatter(
+                x=filtered_df.index,
+                y=filtered_df[(strategy, 'Total Reward')],  # Ensure this matches MultiIndex structure
+                mode='lines+markers',
+                name=strategy
+            ))
+
+        fig.update_layout(
+            title=f'Reward Comparison for Label: {selected_label}',
+            xaxis_title='Agent Generation',
+            yaxis_title='Reward',
+            legend_title="Strategy",
+            xaxis=dict(type='category')
+        )
+
+        return fig
+
+    def open_browser():
+        webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
+
+    Timer(1, open_browser).start()
+    app.run_server(debug=False, port=port_number)

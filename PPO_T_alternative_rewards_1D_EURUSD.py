@@ -64,13 +64,13 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.25  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 10000  # penalty for changing position
+        provision_cost = - provision * 1000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 10
+        provision_cost = + provision * 1
     else:
         provision_cost = 0
 
@@ -220,8 +220,8 @@ class Transformer_PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
                  static_input_dims=1, lr_decay_rate=0.99):
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
+        # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma  # Discount factor
         self.policy_clip = policy_clip  # PPO policy clipping parameter
@@ -557,7 +557,7 @@ if __name__ == '__main__':
     start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date::'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
@@ -585,27 +585,27 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 10  # 30
-    num_episodes = 2000
+    num_episodes = 2500
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor of future rewards
+                                  gamma=0.5,  # discount factor of future rewards
                                   alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
-                                  n_epochs=20,  # number of epochs
+                                  n_epochs=10,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.0000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.999,  # learning rate decay rate
+                                  lr_decay_rate=0.9999,  # learning rate decay rate
                                   )
 
-    total_rewards, episode_durations, total_balances  = [], [], []
+    total_rewards, episode_durations, total_balances = [], [], []
     episode_probabilities = {'train': [], 'validation': [], 'test': []}
 
     index = pd.MultiIndex.from_product([range(num_episodes), ['validation', 'test']], names=['episode', 'dataset'])
@@ -750,7 +750,7 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations, Reward_generations
 
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(),'Number of Trades'), (agent.get_name(),'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
@@ -759,5 +759,6 @@ if __name__ == '__main__':
     PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8050)
     Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
     PnL_generations(backtest_results, port_number=8052)
+    Reward_generations(backtest_results, port_number=8053)
 
     print('end')
