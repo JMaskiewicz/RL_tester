@@ -19,9 +19,10 @@ This project implements a different agent designed for algorithmic trading. The 
 ## Results
 
 ### Transformer-based Proximal Policy Optimization (TPPO) Agent for Algorithmic Trading:
+TODO add results
 
 ### Double Deep Q Network (DDQN) Agent for Algorithmic Trading:
-
+TODO add results
 
 ## Getting Started
 
