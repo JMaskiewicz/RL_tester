@@ -23,3 +23,34 @@ This project implements a different agent designed for algorithmic trading. The 
 ### Double Deep Q Network (DDQN) Agent for Algorithmic Trading:
 
 
+## Getting Started
+
+To begin with the RL_tester, follow these setup instructions.
+
+### Prerequisites
+
+- Python 3.10 or higher is required.
+
+### Installation
+
+1. **Clone the Repository**: Start by cloning the repository to your local machine to access the project files. Open your terminal or command prompt and run:
+
+    ```bash
+    git clone https://github.com/JMaskiewicz/RL_tester/tree/master
+    cd RL_tester
+    ```
+
+2. **Install Dependencies**: After setting up the virtual environment and cloning the repository, you need to install the required dependencies. Execute:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This will install all necessary libraries, including PyTorch, NumPy, and Pandas.
+
+3. **Run the Agent**: With the dependencies installed, you are ready to run the agent. Run the script:
+
+    ```bash
+    python PPO_T_alternative_rewards_1D_SPX.py
+    ```
+
