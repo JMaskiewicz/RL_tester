@@ -14,8 +14,8 @@ Some notes on the code:
 - learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
 - higher number of epochs agent would less likely to take a neutral position
 
-Reward testing:
-- higher penalty for wrong actions this would make agent more likely to take a neutral position
+Reward testing:tral p
+- higher penalty for wrong actions this would make agent more likely to take a neuosition
 - higher number of epochs agent would less likely to take a neutral position
 - premium for holding position agent would less likely to change position
 """
@@ -64,7 +64,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1  # penalty for wrong action
+        reward *= 1.1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -92,7 +92,6 @@ class PPOMemory:
         self.dones = None
         self.static_states = None
         self.alternative_rewards = None
-
         self.batch_size = batch_size
         self.clear_memory()
         self.device = device
@@ -221,8 +220,8 @@ class Transformer_PPO_Agent:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
                  static_input_dims=1, lr_decay_rate=0.99):
-        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
+        # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
         self.gamma = gamma  # Discount factor
         self.policy_clip = policy_clip  # PPO policy clipping parameter
@@ -404,53 +403,37 @@ class Transformer_PPO_Agent:
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: A tuple containing the computed advantages and discounted rewards tensors.
         '''
-        # Ensure rewards, values, and dones are 1D tensors
         n = len(rewards)
-        num_actions = alternative_rewards_arr.shape[1]  # Number of possible actions
-        advantages = torch.zeros_like(rewards)  # Initialize the advantages tensor
-        discounted_rewards = torch.zeros_like(rewards)  # Initialize the discounted rewards tensor
+        num_actions = alternative_rewards_arr.shape[1]
+        advantages = torch.zeros_like(rewards)
+        discounted_rewards = torch.zeros_like(rewards)
 
         # Precompute next_values and last_gae_lam for each possible action
-        next_values_per_action = torch.zeros((num_actions, n + 1))  # Initialize the next values tensor
-        last_gae_lam_per_action = torch.zeros((num_actions, n))  # Initialize the last GAE lambda tensor
-        dones = dones.float()  # Convert dones to float
+        next_values_per_action = torch.zeros((num_actions, n + 1))
+        last_gae_lam_per_action = torch.zeros((num_actions, n))
+        dones = dones.float()
 
-        next_values_per_action[:, -1] = 0.0  # Set the terminal value to 0
+        next_values_per_action[:, -1] = 0.0
 
-        # Precompute the next values and last GAE lambda for each possible action
         for action in range(num_actions):
             for t in reversed(range(n)):
-                if t == n - 1:  # Last timestep
+                if t == n - 1:
                     next_non_terminal = 1.0 - dones[t]
                     next_values = 0.0
                 else:
-                    next_non_terminal = 1.0 - dones[t + 1]  # 1 if not terminal, 0 if terminal
-                    next_values = next_values_per_action[action, t + 1]   # Get the next value for the action
+                    next_non_terminal = 1.0 - dones[t + 1]
+                    next_values = next_values_per_action[action, t + 1]
 
-                # Get the reward for the action at the current timestep
                 reward_for_action = alternative_rewards_arr[t, action]
-
-                # Calculate the delta and last GAE lambda
                 delta = reward_for_action + self.gamma * next_values * next_non_terminal - values[t]
-
-                # Update the next values and last GAE lambda
                 last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam_per_action[action, t]
-
-                # Store the precomputed values
                 next_values_per_action[action, t] = reward_for_action + self.gamma * next_values * next_non_terminal
-
-                # Store the last GAE lambda
                 last_gae_lam_per_action[action, t] = last_gae_lam
 
         # Select the precomputed values based on the action taken
         for t in range(n):
-            # Get the action taken at the current timestep
             action_taken = actions[t].long()
-
-            # Choose the next value and last GAE lambda based on the action taken
             advantages[t] = last_gae_lam_per_action[action_taken, t]
-
-            # Calculate the discounted rewards
             discounted_rewards[t] = advantages[t] + values[t]
 
         return advantages, discounted_rewards
@@ -540,70 +523,84 @@ class Transformer_PPO_Agent:
 if __name__ == '__main__':
     # time the execution
     start_time_X = time.time()
-
     # Set seeds for reproducibility
     torch.manual_seed(0)
     np.random.seed(0)
     random.seed(0)
 
+    # Example usage
     # Stock market variables
-    df = load_data_parallel(['SPXUSD'], '1H')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '4H')
 
     indicators = [
-        {"indicator": "RSI", "mkf": 'SPXUSD', "length": 14},
-        {"indicator": "ATR", "mkf": 'SPXUSD', "length": 24},
-        {"indicator": "MACD", "mkf": 'SPXUSD'},
-        {"indicator": "Stochastic", "mkf": 'SPXUSD'}, ]
+        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
+        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
+        {"indicator": "MACD", "mkf": "EURUSD"},
+        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
     return_indicators = [
-        {"price_type": "Close", "mkf": 'SPXUSD'},
+        {"price_type": "Close", "mkf": "EURUSD"},
+        {"price_type": "Close", "mkf": "USDJPY"},
+        {"price_type": "Close", "mkf": "EURJPY"},
+        {"price_type": "Close", "mkf": "GBPUSD"},
     ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
     add_time_sine_cosine(df, '1W')
-    # df[("RSI_14", 'SPXUSD')] = df[("RSI_14", 'SPXUSD')] / 100
+    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     df = df.dropna()
-    start_date = '2013-01-01'
-    validation_date = '2022-01-01'
-    test_date = '2023-01-01'
-    df_train, df_validation, df_test = df[start_date:], df[validation_date:test_date], df[test_date:]
+    # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
+    start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2021-01-01'
+    test_date = '2022-01-01'
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
-        {"variable": ("Close", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("RSI_14", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("ATR_24", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("K%", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("D%", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("MACD_Line", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("Signal_Line", 'SPXUSD'), "edit": "standardize"},
-        {"variable": ("Returns_Close", 'SPXUSD'), "edit": None},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("sin_time_1W", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
-    tradable_markets = 'SPXUSD'
-    window_size = '6M'
+    tradable_markets = 'EURUSD'
+    window_size = '1Y'
     starting_balance = 10000
     look_back = 20
-    provision = 0.0005  # 0.00025, SP500 spread + provision 0.00025
+    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    leverage = 10  # 30
-    num_episodes = 2000
+    leverage = 1  # 30
+    num_episodes = 5000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.75,  # discount factor of future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
-                                  batch_size=8192,  # size of the memory
+                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                  batch_size=4096,  # size of the memory
                                   n_epochs=10,  # number of epochs
-                                  mini_batch_size=256,  # size of the mini-batches
-                                  weight_decay=0.000001,  # weight decay
+                                  mini_batch_size=128,  # size of the mini-batches
+                                  weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
                                   lr_decay_rate=0.999,  # learning rate decay rate
@@ -667,11 +664,10 @@ if __name__ == '__main__':
                 agent.memory.clear_memory()
 
             if generation < agent.generation:
-                # TODO make it a function
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     futures = []
                     for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'SPXUSD', look_back,
+                        future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
                                                  variables, provision, starting_balance, leverage,
                                                  Trading_Environment_Basic, reward_calculation)
                         futures.append((future, label))
@@ -755,14 +751,15 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations
+    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations, Reward_generations
 
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(),'Number of Trades'), (agent.get_name(),'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8062)
-    Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
-    PnL_generations(backtest_results, port_number=8063)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8050)
+    Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8052)
+    Reward_generations(backtest_results, port_number=8053)
 
     print('end')
