@@ -557,7 +557,7 @@ if __name__ == '__main__':
     start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
@@ -584,25 +584,25 @@ if __name__ == '__main__':
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
-    leverage = 10  # 30
-    num_episodes = 2500
+    leverage = 1  # 30
+    num_episodes = 2000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.5,  # discount factor of future rewards
-                                  alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gamma=0.75,  # discount factor of future rewards
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
-                                  n_epochs=10,  # number of epochs
+                                  n_epochs=1,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.0000001,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.9999,  # learning rate decay rate
+                                  lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []
