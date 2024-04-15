@@ -64,7 +64,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.1  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -554,10 +554,10 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
+    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2021-01-01'
     test_date = '2022-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
@@ -586,24 +586,24 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 5000
+    num_episodes = 2500
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.75,  # discount factor of future rewards
-                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
                                   batch_size=4096,  # size of the memory
                                   n_epochs=10,  # number of epochs
                                   mini_batch_size=128,  # size of the mini-batches
                                   weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.999,  # learning rate decay rate
+                                  lr_decay_rate=0.995,  # learning rate decay rate
                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []
@@ -613,7 +613,7 @@ if __name__ == '__main__':
     columns = ['Final Balance', 'Dataset Index']
     backtest_results = pd.DataFrame(index=index, columns=columns)
 
-    window_size_2 = '6M'
+    window_size_2 = '1Y'
     test_rolling_datasets = rolling_window_datasets(df_test, window_size=window_size_2, look_back=look_back)
     val_rolling_datasets = rolling_window_datasets(df_validation, window_size=window_size_2, look_back=look_back)
 
