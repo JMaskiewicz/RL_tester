@@ -554,22 +554,22 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2008-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2021-01-01'
+    start_date = '2007-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2019-01-01'
     test_date = '2022-01-01'
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        #{"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        #{"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        #"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
         {"variable": ("sin_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
@@ -586,19 +586,19 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 2500
+    num_episodes = 5000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor of future rewards
-                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gamma=0.25,  # discount factor of future rewards
+                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
-                                  batch_size=4096,  # size of the memory
-                                  n_epochs=10,  # number of epochs
+                                  ec_decay_rate=0.999,  # entropy coefficient decay rate
+                                  batch_size=8192,  # size of the memory
+                                  n_epochs=1,  # number of epochs
                                   mini_batch_size=128,  # size of the mini-batches
                                   weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda

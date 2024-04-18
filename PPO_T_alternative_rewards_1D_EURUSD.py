@@ -58,19 +58,28 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = (current_close - previous_close) / previous_close
     else:
         normal_return = 0
+    '''
+    magnitude_of_reward = abs(normal_return) ** (1 / 2) * 100
+
+    # Apply the sign of normal_return to the magnitude of the reward
+    if normal_return < 0:
+        reward = -magnitude_of_reward * current_position
+    else:
+        reward = magnitude_of_reward * current_position
+    '''
 
     # Calculate the base reward
-    reward = normal_return * current_position * 1000
+    reward = normal_return * current_position * 100
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.25  # penalty for wrong action
+        reward *= 1.1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 1000  # penalty for changing position
+        provision_cost = - provision * 100  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
-        provision_cost = + provision * 1
+        provision_cost = + provision * 0
     else:
         provision_cost = 0
 
@@ -534,7 +543,7 @@ if __name__ == '__main__':
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
+        {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
         {"indicator": "MACD", "mkf": "EURUSD"},
         {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
@@ -554,22 +563,25 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2012-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2021-01-01'
-    test_date = '2022-01-01'
+    start_date = '2007-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2019-01-01'
+    test_date = '2025-01-01'
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:] # df[start_date:validation_date]
+    # podzielic na wiecej miesiecy i sprawdzic czy zanulizowane odchylenie standardowe zwrotow ze strategii
+    # sprzedawanie wynikow badania
 
     variables = [
-        #{"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        #{"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        #{"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        #{"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        #{"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        #{"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        #{"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        #{"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         #{"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        #{"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
         #{"variable": ("K%", "EURUSD"), "edit": "standardize"},
         #{"variable": ("D%", "EURUSD"), "edit": "standardize"},
         #{"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
         #{"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -579,30 +591,30 @@ if __name__ == '__main__':
     tradable_markets = 'EURUSD'
     window_size = '1Y'
     starting_balance = 10000
-    look_back = 10
+    look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
     provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 10000
+    num_episodes = 3000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.1,  # discount factor of future rewards
-                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                  gae_lambda=0.8,  # lambda for generalized advantage estimation
+                                  gamma=0.5,  # discount factor of future rewards
+                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gae_lambda=0.7,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.9999,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
                                   n_epochs=1,  # number of epochs
                                   mini_batch_size=64,  # size of the mini-batches
                                   weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.999,  # learning rate decay rate
+                                  lr_decay_rate=0.99,  # learning rate decay rate
                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []
@@ -752,7 +764,7 @@ if __name__ == '__main__':
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
     from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations, Reward_generations
 
-    plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(),'Number of Trades'), (agent.get_name(),'Total Reward')], agent.get_name())
+    plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(), 'Number of Trades'), (agent.get_name(), 'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
@@ -760,5 +772,6 @@ if __name__ == '__main__':
     Probability_generation_plot(probs_dfs, port_number=8051)  # TODO add here OHLC
     PnL_generations(backtest_results, port_number=8052)
     Reward_generations(backtest_results, port_number=8053)
+    # new plot about drown down
 
     print('end')
