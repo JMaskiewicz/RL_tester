@@ -530,7 +530,7 @@ if __name__ == '__main__':
 
     # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '4H')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1H')
 
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
@@ -564,13 +564,13 @@ if __name__ == '__main__':
         #{"variable": ("Close", "EURUSD"), "edit": "standardize"},
         #{"variable": ("Close", "EURJPY"), "edit": "standardize"},
         #{"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        #"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         #{"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
         #{"variable": ("K%", "EURUSD"), "edit": "standardize"},
         #{"variable": ("D%", "EURUSD"), "edit": "standardize"},
         #{"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
         #{"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
+        #{"variable": ("sin_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -582,28 +582,28 @@ if __name__ == '__main__':
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.00025  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 5000
+    num_episodes = 2000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.25,  # discount factor of future rewards
-                                  alpha=0.000075,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gamma=0.5,  # discount factor of future rewards
+                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.999,  # entropy coefficient decay rate
-                                  batch_size=8192,  # size of the memory
+                                  ec_decay_rate=0.975,  # entropy coefficient decay rate
+                                  batch_size=16384,  # size of the memory
                                   n_epochs=1,  # number of epochs
-                                  mini_batch_size=128,  # size of the mini-batches
+                                  mini_batch_size=256,  # size of the mini-batches
                                   weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.995,  # learning rate decay rate
+                                  lr_decay_rate=0.95,  # learning rate decay rate
                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []
