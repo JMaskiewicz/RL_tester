@@ -377,7 +377,7 @@ class Transformer_PPO_Agent:
         return new_probs, dist.entropy(), actor_loss, critic_loss
 
     def compute_discounted_rewards(self, rewards, values, dones, actions, alternative_rewards_arr):
-        '''
+        """
         Compute the discounted rewards and advantages using GAE (Generalized Advantage Estimation).
         This method takes a novel approach by precomputing the potential outcomes for each possible action at each timestep.
         Instead of assuming a single future path, it calculates and stores the next values and last GAE lambda for each
@@ -401,8 +401,10 @@ class Transformer_PPO_Agent:
                                                     represents the reward for a specific action.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: A tuple containing the computed advantages and discounted rewards tensors.
-        '''
+            Tuple[torch.Tensor, torch.Tensor]: A tuple containing the computed advantages and discounted rewards
+                                                tensors.
+        """
+
         n = len(rewards)
         num_actions = alternative_rewards_arr.shape[1]
         advantages = torch.zeros_like(rewards)
