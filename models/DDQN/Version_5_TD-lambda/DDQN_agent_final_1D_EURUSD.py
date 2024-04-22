@@ -54,7 +54,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * 1000
+    reward = normal_return * current_position * 10000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
@@ -62,7 +62,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 1000  # penalty for changing position
+        provision_cost = - provision * 10000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
@@ -430,7 +430,7 @@ if __name__ == '__main__':
                        l1_lambda=0.0000005,  # L1 regularization lambda
                        lr_decay_rate=0.9999,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.75,  # Lambda for TD(lambda) learning
+                       lambda_=0.25,  # Lambda for TD(lambda) learning
                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
