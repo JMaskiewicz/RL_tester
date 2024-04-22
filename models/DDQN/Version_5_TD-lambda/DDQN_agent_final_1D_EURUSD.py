@@ -236,22 +236,24 @@ class DDQN_Agent:
                 q_next = self.q_target(mini_states_).detach()
                 q_eval = self.q_policy(mini_states_).detach()
 
-                # Calculate the maximum Q-values for the next states
                 max_actions = torch.argmax(q_eval, dim=1)
                 q_next[mini_dones] = 0.0
                 q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
-                # MSE loss
-                loss = F.mse_loss(q_pred, q_target)
+                td_error = q_target - q_pred
+                eligibility_traces_mini = eligibility_traces[start:end]  # work with the correct segment
+                eligibility_traces_mini = self.gamma * self.lambda_ * eligibility_traces_mini
+                eligibility_traces_mini.scatter_(1, mini_actions.unsqueeze(-1), 1)
 
-                # Calculate L1 penalty for all parameters
+                expanded_td_error = td_error.unsqueeze(1).expand_as(eligibility_traces_mini)
+                loss = (expanded_td_error.pow(2) * eligibility_traces_mini).mean()
+
                 l1_penalty = sum(p.abs().sum() for p in self.q_policy.parameters())
                 total_loss = loss + self.l1_lambda * l1_penalty
 
-                # Backpropagate the loss
+                self.policy_optimizer.zero_grad()
                 total_loss.backward()
                 self.policy_optimizer.step()
-
 
         # Decay learning rate
         self.policy_scheduler.step()
@@ -380,19 +382,19 @@ if __name__ == '__main__':
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
     start_date = '2007-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2019-01-01'
+    validation_date = '2018-12-31'
     test_date = '2022-01-01'
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
 
     variables = [
-        # {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        # {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        # {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        # {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        # {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        # {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        # {"variable": ("sin_time_1W", ""), "edit": None},
-        # {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        {"variable": ("sin_time_1W", ""), "edit": None},
+        {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -408,15 +410,15 @@ if __name__ == '__main__':
 
     # Environment parameters
     leverage = 1
-    num_episodes = 100  # 100
+    num_episodes = 5000  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.00005,  # learning rate for the policy network
-                       target_alpha=0.000005,  # learning rate for the target network
+                       policy_alpha=0.000005,  # learning rate for the policy network
+                       target_alpha=0.0000005,  # learning rate for the target network
                        gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.999,  # epsilon decay rate 0.99
