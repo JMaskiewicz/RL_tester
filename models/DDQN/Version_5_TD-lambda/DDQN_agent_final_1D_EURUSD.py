@@ -54,7 +54,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * 10000
+    reward = normal_return * current_position * 100000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
@@ -62,7 +62,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 10000  # penalty for changing position
+        provision_cost = - provision * 1  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
@@ -387,14 +387,14 @@ if __name__ == '__main__':
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        # {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        # {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        # {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        # {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("sin_time_1W", ""), "edit": None},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -417,20 +417,20 @@ if __name__ == '__main__':
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.000005,  # learning rate for the policy network
-                       target_alpha=0.0000005,  # learning rate for the target network
-                       gamma=0.25,  # discount factor 0.99
+                       policy_alpha=0.0000005,  # learning rate for the policy network
+                       target_alpha=0.00000005,  # learning rate for the target network
+                       gamma=0.5,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.995,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
-                       mem_size=100000,   # memory size 100000
-                       batch_size=1024,  # batch size  1024
+                       mem_size=10000000,   # memory size 100000
+                       batch_size=4096,  # batch size  1024
                        replace=10,  # replace target network count 10
-                       weight_decay=0.000005,  # Weight decay
-                       l1_lambda=0.0000005,  # L1 regularization lambda
+                       weight_decay=0.0000005,  # Weight decay
+                       l1_lambda=0.00000005,  # L1 regularization lambda
                        lr_decay_rate=0.9999,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.25,  # Lambda for TD(lambda) learning
+                       lambda_=0.5,  # Lambda for TD(lambda) learning
                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
@@ -583,7 +583,6 @@ if __name__ == '__main__':
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'), (agent.get_name(),'Number of Trades'), (agent.get_name(),'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
-
 
     PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8060)
     Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
