@@ -584,17 +584,17 @@ if __name__ == '__main__':
     starting_balance = 10000
     look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.00025  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 2000
+    num_episodes = 2500
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
                                   gamma=0.5,  # discount factor of future rewards
-                                  alpha=0.0001,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                   gae_lambda=0.8,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
@@ -605,7 +605,7 @@ if __name__ == '__main__':
                                   weight_decay=0.0000005,  # weight decay
                                   l1_lambda=1e-7,  # L1 regularization lambda
                                   static_input_dims=1,  # static input dimensions (current position)
-                                  lr_decay_rate=0.95,  # learning rate decay rate
+                                  lr_decay_rate=0.999,  # learning rate decay rate
                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []

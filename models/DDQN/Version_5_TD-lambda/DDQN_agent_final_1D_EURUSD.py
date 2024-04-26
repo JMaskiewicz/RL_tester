@@ -54,15 +54,15 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * 1000
+    reward = normal_return * current_position * 100
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1  # penalty for wrong action
+        reward *= 1.2  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 1000  # penalty for changing position
+        provision_cost = - provision * 100  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
@@ -404,31 +404,31 @@ if __name__ == '__main__':
     tradable_markets = 'EURUSD'
     window_size = '1Y'
     starting_balance = 10000
-    look_back = 40
+    look_back = 20
     # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-    provision = 0.0002  # 0.001, cant be too high as it would not learn to trade
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
     # Environment parameters
     leverage = 1
-    num_episodes = 1000  # 100
+    num_episodes = 5000  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
-                       mini_batch_size=4096,  # mini batch size 128
-                       policy_alpha=0.0005,  # learning rate for the policy network
+                       mini_batch_size=128,  # mini batch size 128
+                       policy_alpha=0.0005,  # learning rate for the policy network  0.0005
                        target_alpha=0.00005,  # learning rate for the target network
-                       gamma=0.5,  # discount factor 0.99
+                       gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
-                       epsilon_dec=0.975,  # epsilon decay rate 0.99
+                       epsilon_dec=0.9975,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
-                       mem_size=100000000,   # memory size 100000
-                       batch_size=4096,  # batch size  1024
+                       mem_size=1000000,   # memory size 100000
+                       batch_size=1024,  # batch size  1024
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.9999,   # Learning rate decay rate
+                       lr_decay_rate=0.99,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
                        lambda_=0.25,  # Lambda for TD(lambda) learning
                        )
