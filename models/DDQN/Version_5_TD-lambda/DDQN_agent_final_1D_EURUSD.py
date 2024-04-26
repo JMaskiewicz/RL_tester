@@ -58,7 +58,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.2  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
@@ -410,7 +410,7 @@ if __name__ == '__main__':
 
     # Environment parameters
     leverage = 1
-    num_episodes = 5000  # 100
+    num_episodes = 2500  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
@@ -428,9 +428,9 @@ if __name__ == '__main__':
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.99,   # Learning rate decay rate
+                       lr_decay_rate=0.95,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.25,  # Lambda for TD(lambda) learning
+                       lambda_=0.75,  # Lambda for TD(lambda) learning
                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
