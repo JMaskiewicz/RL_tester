@@ -54,7 +54,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = 0
 
     # Calculate the base reward
-    reward = normal_return * current_position * 100
+    reward = normal_return * current_position * 1000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
@@ -62,7 +62,7 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 100  # penalty for changing position
+        provision_cost = - provision * 1000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
@@ -410,13 +410,13 @@ if __name__ == '__main__':
 
     # Environment parameters
     leverage = 1
-    num_episodes = 2500  # 100
+    num_episodes = 5000  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # +1 for the current position
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
-                       mini_batch_size=128,  # mini batch size 128
+                       mini_batch_size=64,  # mini batch size 128
                        policy_alpha=0.0005,  # learning rate for the policy network  0.0005
                        target_alpha=0.00005,  # learning rate for the target network
                        gamma=0.75,  # discount factor 0.99
@@ -428,9 +428,9 @@ if __name__ == '__main__':
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.95,   # Learning rate decay rate
+                       lr_decay_rate=0.975,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.75,  # Lambda for TD(lambda) learning
+                       lambda_=0.5,  # Lambda for TD(lambda) learning
                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
