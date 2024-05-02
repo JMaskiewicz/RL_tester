@@ -3,6 +3,9 @@
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+    </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
     <option name="IS_MODULE_SDK" value="true" />
@@ -10,7 +13,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <module name="" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/PPO_T_alternative_rewards_1H_SPX.py" />
+    <option name="SCRIPT_NAME" value="C:\Users\jmask\PycharmProjects\RL_tester\models\final\SP500\PPO_T_alternative_rewards_1H_SPX.py" />
     <option name="PARAMETERS" value="" />
     <option name="SHOW_COMMAND_LINE" value="true" />
     <option name="EMULATE_TERMINAL" value="false" />
