@@ -257,13 +257,13 @@ class DDQN_Agent:
                 end = min((mini_batch + 1) * self.mini_batch_size, self.batch_size)
 
                 # Convert the mini-batch to tensors
-                mini_dynamic_states = torch.tensor(dynamic_states, dtype=torch.float).unsqueeze(1).to(self.device)
-                mini_static_states = torch.tensor(static_states, dtype=torch.float).to(self.device)
-                mini_dynamic_states_ = torch.tensor(dynamic_states_, dtype=torch.float).unsqueeze(1).to(self.device)
-                mini_static_states_ = torch.tensor(static_states_, dtype=torch.float).to(self.device)
-                mini_actions = torch.tensor(actions).to(self.device)
-                mini_rewards = torch.tensor(rewards, dtype=torch.float).to(self.device)
-                mini_dones = torch.tensor(dones, dtype=torch.bool).to(self.device)
+                mini_dynamic_states = torch.tensor(dynamic_states[start:end], dtype=torch.float).unsqueeze(1).to(self.device)
+                mini_static_states = torch.tensor(static_states[start:end], dtype=torch.float).to(self.device)
+                mini_dynamic_states_ = torch.tensor(dynamic_states_[start:end], dtype=torch.float).unsqueeze(1).to(self.device)
+                mini_static_states_ = torch.tensor(static_states_[start:end], dtype=torch.float).to(self.device)
+                mini_actions = torch.tensor(actions[start:end]).to(self.device)
+                mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
+                mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
 
                 q_pred = self.q_policy(mini_dynamic_states, mini_static_states).gather(1, mini_actions.unsqueeze(
                     -1)).squeeze(-1)
@@ -340,10 +340,13 @@ class DDQN_Agent:
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        dynamic_state = observation.reshape(1, -1)
+        static_state = np.array([current_position]).reshape(1, -1)
 
-        q_values = self.q_policy(state)
+        dynamic_state_tensor = torch.tensor(dynamic_state, dtype=torch.float).to(self.device)
+        static_state_tensor = torch.tensor(static_state, dtype=torch.float).to(self.device)
+
+        q_values = self.q_policy(dynamic_state_tensor, static_state_tensor)
 
         return q_values.cpu().numpy()
 
@@ -352,7 +355,7 @@ class DDQN_Agent:
         """
         Selects the best action based on the highest Q-value without exploration.
         """
-        q_values = self.get_action_q_values(observation)
+        q_values = self.get_action_q_values(observation, current_position)
         best_action = np.argmax(q_values)
         return best_action
 
@@ -367,12 +370,19 @@ class DDQN_Agent:
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
-        observation = np.append(observation, current_position)
 
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        # Separate handling of dynamic and static states
+        dynamic_state = observation.reshape(1, -1)
+        static_state = np.array([current_position]).reshape(1, -1)  # Static state, reshaped for batch processing
 
-        q_values = self.q_policy(state)
+        # Convert numpy arrays to tensors and ensure they are on the correct device
+        dynamic_state_tensor = torch.tensor(dynamic_state, dtype=torch.float).to(self.device)
+        static_state_tensor = torch.tensor(static_state, dtype=torch.float).to(self.device)
+
+        # Pass both state components to the network
+        q_values = self.q_policy(dynamic_state_tensor, static_state_tensor)
+
+        # Compute the softmax to get action probabilities
         probabilities = F.softmax(q_values, dim=1).cpu().numpy()
 
         return probabilities.flatten()
