@@ -101,6 +101,9 @@ class TransformerDuelingQNetwork(nn.Module):
         self.fc_advantage = nn.Linear(256, n_actions)
 
     def forward(self, dynamic_state, static_state):
+        if len(dynamic_state.shape) == 2:
+            dynamic_state = dynamic_state.unsqueeze(1)  # Adding sequence dimension if it's missing
+
         batch_size, seq_length, _ = dynamic_state.size()
         positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
 
@@ -465,7 +468,7 @@ if __name__ == '__main__':
                        target_alpha=0.000025,  # learning rate for the target network
                        gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
-                       epsilon_dec=0.9999,  # epsilon decay rate 0.99
+                       epsilon_dec=0.998,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
                        mem_size=1000000,   # memory size 100000
                        batch_size=1024,  # batch size  1024
@@ -630,10 +633,10 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8060)
-    Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
-    PnL_generations(backtest_results, port_number=8062)
-    Reward_generations(backtest_results, port_number=8063)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8064)
+    Probability_generation_plot(probs_dfs, port_number=8065)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8066)
+    Reward_generations(backtest_results, port_number=8067)
 
     print('end')
 
