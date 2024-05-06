@@ -144,7 +144,7 @@ class PPOMemory:
         self.alternative_rewards = torch.cat(self.alternative_rewards, dim=0).to(self.device)
 
 class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1/4, static_input_dims=1):
         super(ActorNetwork, self).__init__()
         self.input_dims = input_dims
         self.static_input_dims = static_input_dims
@@ -647,9 +647,14 @@ if __name__ == '__main__':
 
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
+
         print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+
         # Create a new environment with the randomly selected window's data
-        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables, tradable_markets=tradable_markets, provision=provision, initial_balance=starting_balance, leverage=leverage, reward_function=reward_calculation)
+        env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
+                                        tradable_markets=tradable_markets, provision=provision,
+                                        initial_balance=starting_balance, leverage=leverage,
+                                        reward_function=reward_calculation)
 
         observation = env.reset()
         done = False
