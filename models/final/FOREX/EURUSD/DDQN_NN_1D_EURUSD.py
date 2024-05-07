@@ -413,7 +413,7 @@ if __name__ == '__main__':
     num_episodes = 10000  # 100
 
     # Instantiate the agent
-    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1 ,  # input dimensions
+    agent = DDQN_Agent(input_dims=len(variables) * look_back + 1,  # input dimensions
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128

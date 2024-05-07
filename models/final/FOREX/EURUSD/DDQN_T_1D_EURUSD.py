@@ -626,17 +626,21 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations, Reward_generations
+    from backtest.plots.OHLC_probability_plot import (PnL_generation_plot, Probability_generation_plot, PnL_generations,
+                                                      Reward_generations, PnL_drawdown_plot)
 
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'),
             (agent.get_name(), 'Number of Trades'), (agent.get_name(), 'Total Reward')], agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8064)
-    Probability_generation_plot(probs_dfs, port_number=8065)  # TODO add here OHLC
-    PnL_generations(backtest_results, port_number=8066)
-    Reward_generations(backtest_results, port_number=8067)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8070)
+    Probability_generation_plot(probs_dfs, port_number=8071)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8072)
+    Reward_generations(backtest_results, port_number=8073)
+    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8074)
+
+    print('end')
 
     print('end')
 
