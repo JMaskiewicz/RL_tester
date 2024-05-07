@@ -417,8 +417,8 @@ if __name__ == '__main__':
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.00025,  # learning rate for the policy network  0.0005
-                       target_alpha=0.000025,  # learning rate for the target network
+                       policy_alpha=0.00033,  # learning rate for the policy network  0.0005
+                       target_alpha=0.000033,  # learning rate for the target network
                        gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.998,  # epsilon decay rate 0.99
@@ -428,7 +428,7 @@ if __name__ == '__main__':
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.975,   # Learning rate decay rate
+                       lr_decay_rate=0.995,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
                        lambda_=0.25,  # Lambda for TD(lambda) learning
                        )
@@ -578,7 +578,8 @@ if __name__ == '__main__':
     print(backtest_results)
 
     from backtest.plots.generation_plot import plot_results, plot_total_rewards, plot_total_balances
-    from backtest.plots.OHLC_probability_plot import PnL_generation_plot, Probability_generation_plot, PnL_generations, Reward_generations
+    from backtest.plots.OHLC_probability_plot import (PnL_generation_plot, Probability_generation_plot, PnL_generations,
+                                                      Reward_generations, PnL_drawdown_plot)
 
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'),
             (agent.get_name(), 'Number of Trades'), (agent.get_name(), 'Total Reward')], agent.get_name())
@@ -589,6 +590,7 @@ if __name__ == '__main__':
     Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
     PnL_generations(backtest_results, port_number=8062)
     Reward_generations(backtest_results, port_number=8063)
+    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8064)
 
     print('end')
 

@@ -302,3 +302,83 @@ def Reward_generations(backtest_results, port_number=8051):  # Consider using a 
 
     Timer(1, open_browser).start()
     app.run_server(debug=False, port=port_number)
+
+
+def calculate_drawdowns(balance_series):
+    percentage_series = 100 * (balance_series / balance_series.iloc[0] - 1)
+    peak = percentage_series.expanding(min_periods=1).max()
+    drawdown = percentage_series - peak
+    return drawdown
+
+def PnL_drawdown_plot(balances_dfs, alternative_strategies=None, port_number=8050):
+    records = []
+    for (agent_gen, data_set), balances in balances_dfs.items():
+        df = pd.DataFrame({'Balance': balances, 'Time Step': range(len(balances))})
+        df['Agent Generation'] = agent_gen
+        df['DATA_SET'] = data_set
+        df['Drawdown'] = calculate_drawdowns(df['Balance'])
+        records.append(df)
+
+    flattened_df = pd.concat(records)
+
+    benchmark_flattened_dfs = []
+    if alternative_strategies:
+        for strategy in alternative_strategies:
+            benchmark_records = []
+            for (strategy_name, data_set), balances in strategy.items():
+                df = pd.DataFrame({'Benchmark Balance': balances, 'Time Step': range(len(balances))})
+                df['Strategy'] = strategy_name
+                df['DATA_SET'] = data_set
+                df['Drawdown'] = calculate_drawdowns(df['Benchmark Balance'])
+                benchmark_records.append(df)
+            benchmark_flattened_dfs.append(pd.concat(benchmark_records))
+    else:
+        benchmark_flattened_dfs = [None]
+
+    app = dash.Dash(__name__)
+
+    app.layout = html.Div([
+        html.H4('Interactive Drawdown Plot'),
+        dcc.Dropdown(
+            id='agent-gen-dropdown',
+            options=[{'label': f'Agent Generation {i}', 'value': i} for i in flattened_df['Agent Generation'].unique()],
+            value=flattened_df['Agent Generation'].unique()[0],
+            clearable=False
+        ),
+        dcc.Dropdown(
+            id='data-set-dropdown',
+            options=[{'label': ds, 'value': ds} for ds in flattened_df['DATA_SET'].unique()],
+            value=flattened_df['DATA_SET'].unique()[0],
+            clearable=False
+        ),
+        dcc.Graph(id='drawdown-plot')
+    ])
+
+    @app.callback(
+        Output('drawdown-plot', 'figure'),
+        [Input('agent-gen-dropdown', 'value'),
+         Input('data-set-dropdown', 'value')]
+    )
+    def update_graph(selected_agent_gen, selected_data_set):
+        filtered_df = flattened_df[
+            (flattened_df['Agent Generation'] == selected_agent_gen) & (flattened_df['DATA_SET'] == selected_data_set)]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=filtered_df['Time Step'], y=filtered_df['Drawdown'], mode='lines', name='Agent Drawdown'))
+
+        for benchmark_flattened_df in benchmark_flattened_dfs:
+            if benchmark_flattened_df is not None:
+                filtered_benchmark_df = benchmark_flattened_df[benchmark_flattened_df['DATA_SET'] == selected_data_set]
+                if not filtered_benchmark_df.empty:
+                    for strategy_name in filtered_benchmark_df['Strategy'].unique():
+                        strategy_df = filtered_benchmark_df[filtered_benchmark_df['Strategy'] == strategy_name]
+                        fig.add_trace(go.Scatter(x=strategy_df['Time Step'], y=strategy_df['Drawdown'], mode='lines', name=f'{strategy_name} Drawdown'))
+
+        fig.update_layout(title='Drawdown Over Time', xaxis_title='Time Step', yaxis_title='Drawdown (%)')
+        return fig
+
+    def open_browser():
+        webbrowser.open_new(f'http://127.0.0.1:{port_number}/')
+
+    Timer(1, open_browser).start()
+    app.run_server(debug=True, port=port_number)

@@ -464,8 +464,8 @@ if __name__ == '__main__':
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.00033,  # learning rate for the policy network  0.0005
-                       target_alpha=0.000033,  # learning rate for the target network
+                       policy_alpha=0.0005,  # learning rate for the policy network  0.0005
+                       target_alpha=0.00005,  # learning rate for the target network
                        gamma=0.5,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.998,  # epsilon decay rate 0.99
@@ -475,7 +475,7 @@ if __name__ == '__main__':
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.99,   # Learning rate decay rate
+                       lr_decay_rate=0.995,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
                        lambda_=0.5,  # Lambda for TD(lambda) learning
                        )
