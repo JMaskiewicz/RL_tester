@@ -641,6 +641,3 @@ if __name__ == '__main__':
     PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8074)
 
     print('end')
-
-    print('end')
-
