@@ -93,12 +93,12 @@ class TransformerDuelingQNetwork(nn.Module):
         self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
         self.fc_static = nn.Linear(static_input_dims, input_dims)
 
-        self.fc1 = nn.Linear(input_dims * 2, 512)
-        self.ln1 = nn.LayerNorm(512)
-        self.fc2 = nn.Linear(512, 256)
-        self.ln2 = nn.LayerNorm(256)
-        self.fc_value = nn.Linear(256, 1)
-        self.fc_advantage = nn.Linear(256, n_actions)
+        self.fc1 = nn.Linear(input_dims * 2, 1024)
+        self.ln1 = nn.LayerNorm(1024)
+        self.fc2 = nn.Linear(1024, 512)
+        self.ln2 = nn.LayerNorm(512)
+        self.fc_value = nn.Linear(512, 1)
+        self.fc_advantage = nn.Linear(512, n_actions)
 
     def forward(self, dynamic_state, static_state):
         if len(dynamic_state.shape) == 2:
@@ -464,9 +464,9 @@ if __name__ == '__main__':
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.00025,  # learning rate for the policy network  0.0005
-                       target_alpha=0.000025,  # learning rate for the target network
-                       gamma=0.75,  # discount factor 0.99
+                       policy_alpha=0.00033,  # learning rate for the policy network  0.0005
+                       target_alpha=0.000033,  # learning rate for the target network
+                       gamma=0.5,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.998,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
@@ -475,9 +475,9 @@ if __name__ == '__main__':
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.975,   # Learning rate decay rate
+                       lr_decay_rate=0.99,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.25,  # Lambda for TD(lambda) learning
+                       lambda_=0.5,  # Lambda for TD(lambda) learning
                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
