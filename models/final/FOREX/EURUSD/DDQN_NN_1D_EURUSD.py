@@ -417,9 +417,9 @@ if __name__ == '__main__':
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.00033,  # learning rate for the policy network  0.0005
-                       target_alpha=0.000033,  # learning rate for the target network
-                       gamma=0.75,  # discount factor 0.99
+                       policy_alpha=0.0005,  # learning rate for the policy network  0.0005
+                       target_alpha=0.00005,  # learning rate for the target network
+                       gamma=0.85,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.998,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
