@@ -553,7 +553,7 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 5000
+    num_episodes = 10000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
@@ -618,8 +618,7 @@ if __name__ == '__main__':
 
         while not done:
             current_position = env.current_position
-            action, prob, val = agent.choose_action(observation, current_position)
-
+            action, prob, val = agent.choose_action(observation, env.current_position)
             observation_, reward, done, info = env.step(action)
             agent.store_transition(observation, action, prob, val, reward, done, current_position)
             observation = observation_

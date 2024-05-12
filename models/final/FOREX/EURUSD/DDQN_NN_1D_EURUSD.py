@@ -318,7 +318,7 @@ class DDQN_Agent_NN_1D_EURUSD:
         """
         Selects the best action based on the highest Q-value without exploration.
         """
-        q_values = self.get_action_q_values(observation)
+        q_values = self.get_action_q_values(observation, current_position)
         best_action = np.argmax(q_values)
         return best_action
 

@@ -395,7 +395,7 @@ class PPO_Agent_NN_1D_EURUSD:
         return advantages, discounted_rewards
 
     @torch.no_grad()
-    def choose_action(self, observation):
+    def choose_action(self, observation, current_position):
         """
         Selects an action based on the current policy and exploration noise.
         """
@@ -414,20 +414,28 @@ class PPO_Agent_NN_1D_EURUSD:
         return action.item(), log_prob.item(), value.item()
 
     @torch.no_grad()
-    def get_action_probabilities(self, observation):
-        """
-        Returns the probabilities of each action for a given observation.
-        """
+    def get_action_probabilities(self, observation, current_position):
+        if not isinstance(observation, np.ndarray):
+            observation = np.array(observation)
+        observation = np.append(observation, current_position)
         observation = np.array(observation).reshape(1, -1)
+        if observation.shape[1] != 301:
+            raise ValueError(f"Expected observation shape [1, 301], got {observation.shape}")
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        with torch.no_grad():
-            probs = self.actor(state)
-        return probs.cpu().numpy()
+        action_probs = self.actor(state)
+
+        # Ensure action_probs does not contain any gradients and convert it to a NumPy array
+        action_probs = action_probs.detach().cpu().numpy()
+
+        # Squeeze the batch dimension from action_probs since we're dealing with a single observation
+        action_probs = np.squeeze(action_probs, axis=0)
+
+        # Return the action probabilities as a NumPy array
+        return action_probs
 
     @torch.no_grad()
-    def choose_best_action(self, observation):
-        # Use the get_action_probabilities method to get the action probabilities for the given observation and static input
-        action_probs = self.get_action_probabilities(observation)
+    def choose_best_action(self, observation, current_position):
+        action_probs = self.get_action_probabilities(observation, current_position)
 
         # Choose the action with the highest probability
         best_action = np.argmax(action_probs)
@@ -507,24 +515,24 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 5000
+    num_episodes = 10000
 
     # Create an instance of the agent
     agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
-                                  input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor of future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                  gae_lambda=0.7,  # lambda for generalized advantage estimation
-                                  policy_clip=0.25,  # clip parameter for PPO
-                                  entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
-                                  batch_size=1024,  # size of the memory
-                                  n_epochs=1,  # number of epochs
-                                  mini_batch_size=128,  # size of the mini-batches
-                                  weight_decay=0.0000005,  # weight decay
-                                  l1_lambda=1e-7,  # L1 regularization lambda
-                                  lr_decay_rate=0.995,  # learning rate decay rate
-                                  )
+                                   input_dims=len(variables) * look_back+1,  # input dimensions
+                                   gamma=0.75,  # discount factor of future rewards
+                                   alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                   gae_lambda=0.7,  # lambda for generalized advantage estimation
+                                   policy_clip=0.25,  # clip parameter for PPO
+                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
+                                   ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                   batch_size=1024,  # size of the memory
+                                   n_epochs=1,  # number of epochs
+                                   mini_batch_size=128,  # size of the mini-batches
+                                   weight_decay=0.0000005,  # weight decay
+                                   l1_lambda=1e-7,  # L1 regularization lambda
+                                   lr_decay_rate=0.995,  # learning rate decay rate
+                                   )
 
     total_rewards, episode_durations, total_balances = [], [], []
     episode_probabilities = {'train': [], 'validation': [], 'test': []}
@@ -568,10 +576,13 @@ if __name__ == '__main__':
         observation = env.reset()
         done = False
         initial_balance = env.balance
+        observation = np.append(observation, 0)
 
         while not done:
-            action, prob, val = agent.choose_action(observation)
+            current_position = env.current_position
+            action, prob, val = agent.choose_action(observation, env.current_position)
             observation_, reward, done, info = env.step(action)
+            observation_ = np.append(observation_, current_position)
             agent.store_transition(observation, action, prob, val, reward, done)
             observation = observation_
 
@@ -677,10 +688,10 @@ if __name__ == '__main__':
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8190)
-    Probability_generation_plot(probs_dfs, port_number=8191)  # TODO add here OHLC
-    PnL_generations(backtest_results, port_number=8192)
-    Reward_generations(backtest_results, port_number=8193)
-    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8194)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8180)
+    Probability_generation_plot(probs_dfs, port_number=8181)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8182)
+    Reward_generations(backtest_results, port_number=8183)
+    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8184)
 
     print('end')
