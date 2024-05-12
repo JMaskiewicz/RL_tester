@@ -45,6 +45,7 @@ Reward Calculation function is the most crucial part of the RL algorithm. It is 
 currently there is 
 """
 
+
 @jit(nopython=True)
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
     # Calculate the normal return
@@ -76,8 +77,9 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     return final_reward
 
+
 class DuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=1/5):
+    def __init__(self, input_dims, n_actions, dropout_rate=1 / 5):
         super(DuelingQNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dims, 1024)
         self.dropout1 = nn.Dropout(dropout_rate)
@@ -151,7 +153,7 @@ class DQNMemory:
         self.alternative_reward_memory = np.zeros_like(self.alternative_reward_memory)
 
 
-class DDQN_Agent_NN_1D_EURUSD:
+class DDQN_Agent_NN_1D_alt_EURUSD:
     def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001,
                  target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000,
                  batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1,
@@ -163,7 +165,7 @@ class DDQN_Agent_NN_1D_EURUSD:
         self.n_epochs = n_epochs  # Number of epochs
         self.mini_batch_size = mini_batch_size  # Mini-batch size
         self.gamma = gamma  # Discount factor
-        self.epsilon = epsilon   # Exploration rate
+        self.epsilon = epsilon  # Exploration rate
         self.epsilon_dec = epsilon_dec  # Exploration rate decay
         self.epsilon_min = epsilon_end  # Minimum exploration rate
         self.mem_size = mem_size  # Memory size
@@ -198,8 +200,8 @@ class DDQN_Agent_NN_1D_EURUSD:
         self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
         self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
-    def store_transition(self, state, action, reward, state_, done):
-        self.memory.store_transition(state, action, reward, state_, done)
+    def store_transition(self, state, action, reward, state_, done, alternative_rewards):
+        self.memory.store_transition(state, action, reward, state_, done, alternative_rewards)
 
     def replace_target_network(self):
         if self.learn_step_counter % self.replace_target_cnt == 0:
@@ -217,7 +219,7 @@ class DDQN_Agent_NN_1D_EURUSD:
         # Set the policy network to training mode
         self.q_policy.train()
 
-        states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
+        states, actions, rewards, states_, dones, alternative_rewards = self.memory.sample_buffer(self.batch_size)
 
         # Initialize eligibility traces
         eligibility_traces = torch.zeros((self.batch_size, self.n_actions)).to(self.device)
@@ -237,6 +239,18 @@ class DDQN_Agent_NN_1D_EURUSD:
                 mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
                 mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
                 mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
+                mini_alternative_rewards = torch.tensor(alternative_rewards[start:end], dtype=torch.float).to(
+                    self.device)
+
+                adjusted_rewards = torch.clone(mini_rewards)
+
+                # Calculate the premium for each action based on its alternative rewards
+                for i in range(mini_actions.size(0)):  # Iterate over batch
+                    action = mini_actions[i].item()
+                    # Starting from the next action position, apply discounting to the end
+                    for j in range(action + 1, mini_alternative_rewards.size(1)):
+                        discount_factor = self.premium_gamma ** (j - action)
+                        adjusted_rewards[i] += discount_factor * mini_alternative_rewards[i, j]
 
                 q_pred = self.q_policy(mini_states).gather(1, mini_actions.unsqueeze(-1)).squeeze(-1)
                 q_next = self.q_target(mini_states_).detach()
@@ -244,7 +258,7 @@ class DDQN_Agent_NN_1D_EURUSD:
 
                 max_actions = torch.argmax(q_eval, dim=1)
                 q_next[mini_dones] = 0.0
-                q_target = mini_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
+                q_target = adjusted_rewards + self.gamma * q_next.gather(1, max_actions.unsqueeze(-1)).squeeze(-1)
 
                 td_error = q_target - q_pred
                 eligibility_traces_mini = eligibility_traces[start:end]  # work with the correct segment
@@ -390,7 +404,8 @@ if __name__ == '__main__':
     start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2017-12-31'
     test_date = '2019-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
+                                                                                                      test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
@@ -419,25 +434,25 @@ if __name__ == '__main__':
     num_episodes = 10000  # 100
 
     # Instantiate the agent
-    agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
-                       n_actions=3,  # buy, sell, hold
-                       n_epochs=1,  # number of epochs 10
-                       mini_batch_size=64,  # mini batch size 128
-                       policy_alpha=0.0005,  # learning rate for the policy network  0.0005
-                       target_alpha=0.00005,  # learning rate for the target network
-                       gamma=0.75,  # discount factor 0.99
-                       epsilon=1.0,  # initial epsilon 1.0
-                       epsilon_dec=0.998,  # epsilon decay rate 0.99
-                       epsilon_end=0,  # minimum epsilon  0
-                       mem_size=1000000,   # memory size 100000
-                       batch_size=1024,  # batch size  1024
-                       replace=10,  # replace target network count 10
-                       weight_decay=0.000005,  # Weight decay
-                       l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.995,   # Learning rate decay rate
-                       premium_gamma=0.5,  # Discount factor for the alternative rewards
-                       lambda_=0.5,  # Lambda for TD(lambda) learning
-                       )
+    agent = DDQN_Agent_NN_1D_alt_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
+                                        n_actions=3,  # buy, sell, hold
+                                        n_epochs=1,  # number of epochs 10
+                                        mini_batch_size=64,  # mini batch size 128
+                                        policy_alpha=0.0005,  # learning rate for the policy network  0.0005
+                                        target_alpha=0.00005,  # learning rate for the target network
+                                        gamma=0.75,  # discount factor 0.99
+                                        epsilon=1.0,  # initial epsilon 1.0
+                                        epsilon_dec=0.998,  # epsilon decay rate 0.99
+                                        epsilon_end=0,  # minimum epsilon  0
+                                        mem_size=1000000,  # memory size 100000
+                                        batch_size=1024,  # batch size  1024
+                                        replace=10,  # replace target network count 10
+                                        weight_decay=0.000005,  # Weight decay
+                                        l1_lambda=0.00000005,  # L1 regularization lambda
+                                        lr_decay_rate=0.995,  # Learning rate decay rate
+                                        premium_gamma=0.5,  # Discount factor for the alternative rewards
+                                        lambda_=0.5,  # Lambda for TD(lambda) learning
+                                        )
 
     total_rewards, episode_durations, total_balances = [], [], []
     episode_probabilities = {'train': [], 'validation': [], 'test': []}
@@ -466,7 +481,8 @@ if __name__ == '__main__':
         window_df = next(dataset_iterator)
         dataset_index = episode % len(rolling_datasets)
 
-        print(f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
+        print(
+            f"\nEpisode {episode + 1}: Learning from dataset with Start Date = {window_df.index.min()}, End Date = {window_df.index.max()}, len = {len(window_df)}")
 
         # Create a new environment with the randomly selected window's data
         env = Trading_Environment_Basic(window_df, look_back=look_back, variables=variables,
@@ -481,10 +497,17 @@ if __name__ == '__main__':
         observation = np.append(observation, 0)
 
         while not done:
+            alternative_rewards = np.zeros(len(agent.action_space))
             action = agent.choose_action(observation, env.current_position)
+
+            for hypothetical_action in range(len(agent.action_space)):
+                hypothetical_position = hypothetical_action
+                hypothetical_reward = env.simulate_step(hypothetical_action, hypothetical_position)
+                alternative_rewards[hypothetical_action] = hypothetical_reward
+
             observation_, reward, done, info = env.step(action)
             observation_ = np.append(observation_, env.current_position)
-            agent.store_transition(observation, action, reward, observation_, done)
+            agent.store_transition(observation, action, reward, observation_, done, alternative_rewards)
             observation = observation_
 
             # Check if enough data is collected or if the dataset ends
@@ -540,8 +563,8 @@ if __name__ == '__main__':
         print(
             f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
         print(f'Final Balance of Buy and Hold benchmark agent: ', starting_balance * (1 + (
-                    window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[
-                look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
+                window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[
+            look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
         # TODO do this as cached function with benchmark agents and df as input
 
     #save_model(agent.q_policy, base_dir="saved models", sub_dir="DDQN", file_name="q_policy")  # TODO repair save_model
@@ -567,8 +590,10 @@ if __name__ == '__main__':
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
     sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
 
-    sah_results_prepared = sah_results_prepared.drop(('', 'Agent Generation'), axis=1)  # drop the agent generation column
-    bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'), axis=1)  # drop the agent generation column
+    sah_results_prepared = sah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
+    bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
 
     # Merge BAH and SAH results on 'Label'
     new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=[('', 'Label')], how='outer')
@@ -588,15 +613,15 @@ if __name__ == '__main__':
                                                       Reward_generations, PnL_drawdown_plot)
 
     plot_results(backtest_results, [(agent.get_name(), 'Final Balance'),
-            (agent.get_name(), 'Number of Trades'), (agent.get_name(), 'Total Reward')], agent.get_name())
+                                    (agent.get_name(), 'Number of Trades'), (agent.get_name(), 'Total Reward')],
+                 agent.get_name())
     plot_total_rewards(total_rewards, agent.get_name())
     plot_total_balances(total_balances, agent.get_name())
 
-    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8060)
-    Probability_generation_plot(probs_dfs, port_number=8061)  # TODO add here OHLC
-    PnL_generations(backtest_results, port_number=8062)
-    Reward_generations(backtest_results, port_number=8063)
-    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8064)
+    PnL_generation_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8080)
+    Probability_generation_plot(probs_dfs, port_number=8081)  # TODO add here OHLC
+    PnL_generations(backtest_results, port_number=8082)
+    Reward_generations(backtest_results, port_number=8083)
+    PnL_drawdown_plot(balances_dfs, [benchmark_BAH, benchmark_SAH], port_number=8084)
 
     print('end')
-
