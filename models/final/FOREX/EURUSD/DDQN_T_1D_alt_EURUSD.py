@@ -459,8 +459,7 @@ if __name__ == '__main__':
     start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2017-12-31'
     test_date = '2019-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
-                                                                                                      test_date:'2023-01-01']
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
         {"variable": ("Close", "USDJPY"), "edit": "standardize"},
