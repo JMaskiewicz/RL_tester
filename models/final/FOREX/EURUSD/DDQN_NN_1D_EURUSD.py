@@ -410,7 +410,7 @@ if __name__ == '__main__':
 
     # Environment parameters
     leverage = 1
-    num_episodes = 10000  # 100
+    num_episodes = 5000  # 100
 
     # Instantiate the agent
     agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
@@ -421,14 +421,14 @@ if __name__ == '__main__':
                        target_alpha=0.00005,  # learning rate for the target network
                        gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
-                       epsilon_dec=0.998,  # epsilon decay rate 0.99
+                       epsilon_dec=0.995,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
                        mem_size=1000000,   # memory size 100000
                        batch_size=1024,  # batch size  1024
                        replace=10,  # replace target network count 10
                        weight_decay=0.000005,  # Weight decay
                        l1_lambda=0.00000005,  # L1 regularization lambda
-                       lr_decay_rate=0.995,   # Learning rate decay rate
+                       lr_decay_rate=0.9925,   # Learning rate decay rate
                        premium_gamma=0.5,  # Discount factor for the alternative rewards
                        lambda_=0.5,  # Lambda for TD(lambda) learning
                        )
