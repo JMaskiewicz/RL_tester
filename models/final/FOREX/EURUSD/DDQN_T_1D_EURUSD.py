@@ -179,7 +179,7 @@ class DQNMemory:
         self.terminal_memory = np.zeros_like(self.terminal_memory)
 
 
-class DDQN_Agent:
+class DDQN_Agent_T_1D_EURUSD:
     def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001,
                  target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000,
                  batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1,
@@ -428,20 +428,20 @@ if __name__ == '__main__':
 
     df = df.dropna()
     # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
-    start_date = '2007-01-01'  # worth to keep 2008 as it was a financial crisis
-    validation_date = '2018-12-31'
-    test_date = '2022-01-01'
-    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:]
+    start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2017-12-31'
+    test_date = '2019-01-01'
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        # {"variable": ("sin_time_1W", ""), "edit": None},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -460,13 +460,13 @@ if __name__ == '__main__':
     num_episodes = 10000  # 100
 
     # Instantiate the agent
-    agent = DDQN_Agent(input_dims=len(variables) * look_back,  # input dimensions
+    agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
                        n_actions=3,  # buy, sell, hold
                        n_epochs=1,  # number of epochs 10
                        mini_batch_size=64,  # mini batch size 128
                        policy_alpha=0.0005,  # learning rate for the policy network  0.0005
                        target_alpha=0.00005,  # learning rate for the target network
-                       gamma=0.5,  # discount factor 0.99
+                       gamma=0.75,  # discount factor 0.99
                        epsilon=1.0,  # initial epsilon 1.0
                        epsilon_dec=0.998,  # epsilon decay rate 0.99
                        epsilon_end=0,  # minimum epsilon  0
