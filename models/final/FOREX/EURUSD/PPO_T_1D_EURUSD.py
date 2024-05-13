@@ -553,17 +553,17 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 10000
+    num_episodes = 5000
 
     # Create an instance of the agent
     agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                   input_dims=len(variables) * look_back,  # input dimensions
-                                  gamma=0.75,  # discount factor of future rewards
-                                  alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                  gae_lambda=0.7,  # lambda for generalized advantage estimation
+                                  gamma=0.9,  # discount factor of future rewards
+                                  alpha=0.00025,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                  gae_lambda=0.9,  # lambda for generalized advantage estimation
                                   policy_clip=0.25,  # clip parameter for PPO
                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                  ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                  ec_decay_rate=0.99,  # entropy coefficient decay rate
                                   batch_size=1024,  # size of the memory
                                   n_epochs=1,  # number of epochs
                                   mini_batch_size=128,  # size of the mini-batches

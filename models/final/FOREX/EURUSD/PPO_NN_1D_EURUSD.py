@@ -489,17 +489,17 @@ if __name__ == '__main__':
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2023-01-01']
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
-        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        # {"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        # {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        # {"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        # {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
+        # {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -520,18 +520,18 @@ if __name__ == '__main__':
     # Create an instance of the agent
     agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
                                    input_dims=len(variables) * look_back+1,  # input dimensions
-                                   gamma=0.75,  # discount factor of future rewards
-                                   alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                   gamma=0.5,  # discount factor of future rewards
+                                   alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                    gae_lambda=0.7,  # lambda for generalized advantage estimation
                                    policy_clip=0.25,  # clip parameter for PPO
                                    entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                   ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                   ec_decay_rate=0.996,  # entropy coefficient decay rate
                                    batch_size=1024,  # size of the memory
                                    n_epochs=1,  # number of epochs
-                                   mini_batch_size=128,  # size of the mini-batches
+                                   mini_batch_size=64,  # size of the mini-batches
                                    weight_decay=0.0000005,  # weight decay
                                    l1_lambda=1e-7,  # L1 regularization lambda
-                                   lr_decay_rate=0.995,  # learning rate decay rate
+                                   lr_decay_rate=0.9975,  # learning rate decay rate
                                    )
 
     total_rewards, episode_durations, total_balances = [], [], []
