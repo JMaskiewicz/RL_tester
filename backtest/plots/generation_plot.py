@@ -72,3 +72,5 @@ def plot_results(df, columns_to_plot, model_name):
         plt.ylabel(column)
         plt.legend()
         plt.show()
+
+# plots with final balance
