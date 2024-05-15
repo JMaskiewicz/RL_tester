@@ -392,6 +392,8 @@ if __name__ == '__main__':
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
+    provision_sum_test_final = 0
+
     add_time_sine_cosine(df, '1W')
 
     look_back = 20
@@ -596,6 +598,9 @@ if __name__ == '__main__':
         bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
                                                          axis=1)  # drop the agent generation column
 
+        print('buy and hold final balance', bah_results_prepared[('BAH',    'Final Balance')][1])
+        print('sell and hold final balance', sah_results_prepared[('SAH',    'Final Balance')][1])
+
         # Merge BAH and SAH results on 'Label'
         new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=[('', 'Label')], how='outer')
 
@@ -643,6 +648,7 @@ if __name__ == '__main__':
         print(f"Final Balance: {final_balance:.2f}")
 
         # save also number of trades and provision sum
+        provision_sum_test_final = provision_sum_test_final + best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
 
         # add year to the dates
         validation_date = (datetime.strptime(validation_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
@@ -650,9 +656,124 @@ if __name__ == '__main__':
         end_date = (datetime.strptime(end_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
 
     # final results for the agent
+    def calculate_number_of_trades_and_duration(df, action_column):
+        actions = df[action_column]
+
+        # Identify trade transitions
+        transitions = (actions.shift(1) != actions) & (actions != 'Neutral')
+        num_trades = transitions.sum()
+
+        # Calculate durations
+        durations = []
+        current_duration = 0
+
+        for action in actions:
+            if action != 'Neutral':
+                current_duration += 1
+            else:
+                if current_duration > 0:
+                    durations.append(current_duration)
+                    current_duration = 0
+
+        # Append the last duration if the series ended with a trade
+        if current_duration > 0:
+            durations.append(current_duration)
+
+        avg_duration = np.mean(durations) if durations else 0
+
+        return num_trades, avg_duration
+
+    def generate_result_statistics(df, strategy_column, balance_column, provision_sum, look_back=1):
+        df = df.reset_index(drop=True)
+
+        # Calculate returns
+        returns = df[balance_column].pct_change().dropna()
+
+        # Calculate Sharpe Ratio
+        sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df) - look_back) if returns.std() > 1e-6 else float('nan')
+
+        # Calculate Cumulative Returns
+        cumulative_returns = (1 + returns).cumprod()
+        peak = cumulative_returns.expanding(min_periods=1).max()
+        drawdown = (cumulative_returns - peak) / peak
+        max_drawdown = drawdown.min()
+
+        # Calculate Sortino Ratio
+        negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - look_back)
+        sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+
+        # Calculate Annual Return and Calmar Ratio
+        annual_return = cumulative_returns.iloc[-1] ** ((len(df) - look_back) / len(returns)) - 1
+        calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
+
+        # Calculate Number of Trades and Average Duration
+        num_trades, avg_duration = calculate_number_of_trades_and_duration(df, strategy_column)
+
+        # Compile metrics
+        metrics = {
+            'Sharpe Ratio': sharpe_ratio,
+            'Sortino Ratio': sortino_ratio,
+            'Max Drawdown': max_drawdown,
+            'Max Drawdown Duration': drawdown.idxmin(),
+            'Calmar Ratio': calmar_ratio,
+            'Number of Trades': num_trades,
+            'Average trade duration': avg_duration,
+            'Provision Sum': provision_sum
+        }
+        return metrics
 
 
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
+    indicators = [
+        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
+        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
+        {"indicator": "MACD", "mkf": "EURUSD"},
+        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
+    return_indicators = [
+        {"price_type": "Close", "mkf": "EURUSD"},
+        {"price_type": "Close", "mkf": "USDJPY"},
+        {"price_type": "Close", "mkf": "EURJPY"},
+        {"price_type": "Close", "mkf": "GBPUSD"},
+    ]
+    add_indicators(df, indicators)
+    add_returns(df, return_indicators)
 
+    add_time_sine_cosine(df, '1W')
+
+    look_back = 20
+    df = df.dropna()
+    df = df[test_date_2:end_date]
+
+    buy_and_hold_agent = Buy_and_hold_Agent()
+    sell_and_hold_agent = Sell_and_hold_Agent()
+
+    # Run backtesting for both agents
+    bah_results, _, benchmark_BAH = BF.run_backtesting(
+        buy_and_hold_agent, 'BAH', [df], ['final_test'],
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
+
+    sah_results, _, benchmark_SAH = BF.run_backtesting(
+        sell_and_hold_agent, 'SAH', [df], ['final_test'],
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
+
+    bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
+    sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
+
+    sah_results_prepared = sah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
+    bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
+
+    # Generate statistics for the final test results
+    statistic_report = generate_result_statistics(final_test_results, f'{agent.get_name()}_Action', f'{agent.get_name()}_Balances', provision_sum_test_final, look_back=look_back)
+    statistic_report.update({'sell and hold final balance': sah_results_prepared[('SAH',    'Final Balance')][0],
+                             'buy and hold final balance':  bah_results_prepared[('BAH',    'Final Balance')][0],
+                             'sell and hold sharpe ratio':  sah_results_prepared[('SAH',    'Sharpe Ratio')][0],
+                             'buy and hold sharpe ratio':   bah_results_prepared[('BAH',    'Sharpe Ratio')][0]})
+
+    print(statistic_report)
     print('end')
