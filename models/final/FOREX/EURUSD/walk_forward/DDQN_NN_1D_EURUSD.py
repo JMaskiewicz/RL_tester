@@ -453,7 +453,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 10  # 100
+        num_episodes = 5000  # 100
 
         # Instantiate the agent
         agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
@@ -464,7 +464,7 @@ if __name__ == '__main__':
                                         target_alpha=0.0000333,  # learning rate for the target network
                                         gamma=0.75,  # discount factor 0.99
                                         epsilon=1.0,  # initial epsilon 1.0
-                                        epsilon_dec=0.995,  # epsilon decay rate 0.99
+                                        epsilon_dec=0.996,  # epsilon decay rate 0.99
                                         epsilon_end=0,  # minimum epsilon  0
                                         mem_size=1000000,  # memory size 100000
                                         batch_size=1024,  # batch size  1024
@@ -578,7 +578,7 @@ if __name__ == '__main__':
 
         buy_and_hold_agent = Buy_and_hold_Agent()
         sell_and_hold_agent = Sell_and_hold_Agent()
-
+        # TODO
         # Run backtesting for both agents
         bah_results, _, benchmark_BAH = BF.run_backtesting(
             buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
@@ -656,72 +656,6 @@ if __name__ == '__main__':
         end_date = (datetime.strptime(end_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
 
     # final results for the agent
-    def calculate_number_of_trades_and_duration(df, action_column):
-        actions = df[action_column]
-
-        # Identify trade transitions
-        transitions = (actions.shift(1) != actions) & (actions != 'Neutral')
-        num_trades = transitions.sum()
-
-        # Calculate durations
-        durations = []
-        current_duration = 0
-
-        for action in actions:
-            if action != 'Neutral':
-                current_duration += 1
-            else:
-                if current_duration > 0:
-                    durations.append(current_duration)
-                    current_duration = 0
-
-        # Append the last duration if the series ended with a trade
-        if current_duration > 0:
-            durations.append(current_duration)
-
-        avg_duration = np.mean(durations) if durations else 0
-
-        return num_trades, avg_duration
-
-    def generate_result_statistics(df, strategy_column, balance_column, provision_sum, look_back=1):
-        df = df.reset_index(drop=True)
-
-        # Calculate returns
-        returns = df[balance_column].pct_change().dropna()
-
-        # Calculate Sharpe Ratio
-        sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df) - look_back) if returns.std() > 1e-6 else float('nan')
-
-        # Calculate Cumulative Returns
-        cumulative_returns = (1 + returns).cumprod()
-        peak = cumulative_returns.expanding(min_periods=1).max()
-        drawdown = (cumulative_returns - peak) / peak
-        max_drawdown = drawdown.min()
-
-        # Calculate Sortino Ratio
-        negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - look_back)
-        sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
-
-        # Calculate Annual Return and Calmar Ratio
-        annual_return = cumulative_returns.iloc[-1] ** ((len(df) - look_back) / len(returns)) - 1
-        calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
-
-        # Calculate Number of Trades and Average Duration
-        num_trades, avg_duration = calculate_number_of_trades_and_duration(df, strategy_column)
-
-        # Compile metrics
-        metrics = {
-            'Sharpe Ratio': sharpe_ratio,
-            'Sortino Ratio': sortino_ratio,
-            'Max Drawdown': max_drawdown,
-            'Max Drawdown Duration': drawdown.idxmin(),
-            'Calmar Ratio': calmar_ratio,
-            'Number of Trades': num_trades,
-            'Average trade duration': avg_duration,
-            'Provision Sum': provision_sum
-        }
-        return metrics
-
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
@@ -769,11 +703,13 @@ if __name__ == '__main__':
                                                      axis=1)  # drop the agent generation column
 
     # Generate statistics for the final test results
-    statistic_report = generate_result_statistics(final_test_results, f'{agent.get_name()}_Action', f'{agent.get_name()}_Balances', provision_sum_test_final, look_back=look_back)
+    statistic_report = BF.generate_result_statistics(final_test_results, f'{agent.get_name()}_Action', f'{agent.get_name()}_Balances', provision_sum_test_final, look_back=look_back)
     statistic_report.update({'sell and hold final balance': sah_results_prepared[('SAH',    'Final Balance')][0],
                              'buy and hold final balance':  bah_results_prepared[('BAH',    'Final Balance')][0],
                              'sell and hold sharpe ratio':  sah_results_prepared[('SAH',    'Sharpe Ratio')][0],
                              'buy and hold sharpe ratio':   bah_results_prepared[('BAH',    'Sharpe Ratio')][0]})
 
+    print(f"Final Balance: {final_balance:.2f}")
+    # 12814
     print(statistic_report)
     print('end')

@@ -365,3 +365,78 @@ def backtest_wrapper_DQN(df, agent, mkf, look_back, variables, provision, initia
     # TODO add description
     """
     return generate_predictions_and_backtest_DQN(df, agent, mkf, look_back, variables, provision, initial_balance, leverage, reward_scaling, Trading_Environment_Basic)
+
+    def calculate_number_of_trades_and_duration(df, action_column):
+        actions = df[action_column]
+
+        # Identify trade transitions
+        transitions = (actions.shift(1) != actions) & (actions != 'Neutral')
+        num_trades = transitions.sum()
+
+        # Calculate durations
+        durations = []
+        current_duration = 0
+
+        for action in actions:
+            if action != 'Neutral':
+                current_duration += 1
+            else:
+                if current_duration > 0:
+                    durations.append(current_duration)
+                    current_duration = 0
+
+        # Append the last duration if the series ended with a trade
+        if current_duration > 0:
+            durations.append(current_duration)
+
+        avg_duration = np.mean(durations) if durations else 0
+
+        return num_trades, avg_duration
+
+    def generate_result_statistics(df, strategy_column, balance_column, provision_sum, look_back=1):
+        df = df.reset_index(drop=True)
+
+        # Calculate returns
+        returns = df[balance_column].pct_change().dropna()
+
+        # Calculate Sharpe Ratio
+        sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df) - look_back) if returns.std() > 1e-6 else float(
+            'nan')
+
+        # Calculate Cumulative Returns
+        cumulative_returns = (1 + returns).cumprod()
+        peak = cumulative_returns.expanding(min_periods=1).max()
+        drawdown = (cumulative_returns - peak) / peak
+        max_drawdown = drawdown.min()
+
+        # Calculate Sortino Ratio
+        negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - look_back)
+        sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+
+        # Calculate Annual Return and Calmar Ratio
+        annual_return = cumulative_returns.iloc[-1] ** ((len(df) - look_back) / len(returns)) - 1
+        calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
+
+        # Calculate Number of Trades and Average Duration
+        num_trades, avg_duration = calculate_number_of_trades_and_duration(df, strategy_column)
+
+        # Calculate the number of times the agent was in long, short, or out of the market
+        in_long = df[df[strategy_column] == 'Long'].shape[0]
+        in_short = df[df[strategy_column] == 'Short'].shape[0]
+        out_of_market = df[df[strategy_column] == 'Neutral'].shape[0]
+
+        # Compile metrics
+        metrics = {
+            'Sharpe Ratio': sharpe_ratio,
+            'Sortino Ratio': sortino_ratio,
+            'Max Drawdown': max_drawdown,
+            'Max Drawdown Duration': drawdown.idxmin(),
+            'Calmar Ratio': calmar_ratio,
+            'Number of Trades': num_trades,
+            'Average trade duration': avg_duration,
+            'Provision Sum': provision_sum,
+            'In long': in_long / len(df),
+            'In short': in_short / len(df),
+            'In out of the market': out_of_market / len(df),
+        }
+        return metrics
