@@ -469,13 +469,13 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 50  # 100
+        num_episodes = 5000  # 100
 
         # Instantiate the agent
         agent = DDQN_Agent_NN_1D_alt_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
                                             n_actions=3,  # buy, sell, hold
                                             n_epochs=1,  # number of epochs 10
-                                            mini_batch_size=64,  # mini batch size 128
+                                            mini_batch_size=128,  # mini batch size 128
                                             policy_alpha=0.000333,  # learning rate for the policy network  0.0005
                                             target_alpha=0.0000333,  # learning rate for the target network
                                             gamma=0.75,  # discount factor 0.99
