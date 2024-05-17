@@ -584,7 +584,7 @@ if __name__ == '__main__':
         agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
                                       input_dims=len(variables) * look_back,  # input dimensions
                                       gamma=0.75,  # discount factor of future rewards
-                                      alpha=0.00025,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                      alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                       gae_lambda=0.75,  # lambda for generalized advantage estimation
                                       policy_clip=0.25,  # clip parameter for PPO
                                       entropy_coefficient=10,  # higher entropy coefficient encourages exploration
