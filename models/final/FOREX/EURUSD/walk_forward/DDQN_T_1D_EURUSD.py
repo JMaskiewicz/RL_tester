@@ -496,7 +496,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 50  # 100
+        num_episodes = 5000  # 50
 
         # Instantiate the agent
         agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
