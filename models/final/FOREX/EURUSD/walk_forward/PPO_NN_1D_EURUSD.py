@@ -534,7 +534,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 10  # 50
+        num_episodes = 7500  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
