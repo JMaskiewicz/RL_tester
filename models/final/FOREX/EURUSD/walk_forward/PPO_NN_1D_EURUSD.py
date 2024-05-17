@@ -419,10 +419,9 @@ class PPO_Agent_NN_1D_EURUSD:
     def get_action_probabilities(self, observation, current_position):
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
+
         observation = np.append(observation, current_position)
         observation = np.array(observation).reshape(1, -1)
-        if observation.shape[1] != 301:
-            raise ValueError(f"Expected observation shape [1, 301], got {observation.shape}")
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
         action_probs = self.actor(state)
 
@@ -501,18 +500,6 @@ if __name__ == '__main__':
 
         df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-        indicators = [
-            {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-            {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-            {"indicator": "MACD", "mkf": "EURUSD"},
-            {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-        return_indicators = [
-            {"price_type": "Close", "mkf": "EURUSD"},
-            {"price_type": "Close", "mkf": "USDJPY"},
-            {"price_type": "Close", "mkf": "EURJPY"},
-            {"price_type": "Close", "mkf": "GBPUSD"},
-        ]
         add_indicators(df, indicators)
         add_returns(df, return_indicators)
 
@@ -547,7 +534,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 50  # 50
+        num_episodes = 10  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
@@ -627,17 +614,18 @@ if __name__ == '__main__':
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         futures = []
                         for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                            future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'EURUSD', look_back,
+                            future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
                                                      variables, provision, starting_balance, leverage,
                                                      Trading_Environment_Basic, reward_calculation)
                             futures.append((future, label))
 
                         for future, label in futures:
                             (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown,
-                             sortino_ratio, calmar_ratio, cumulative_returns, balances) = future.result()
+                             sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum) = future.result()
                             result_data = {
                                 'Agent generation': agent.generation,
                                 'Label': label,
+                                'Provision_sum': provision_sum,
                                 'Final Balance': balance,
                                 'Total Reward': total_reward,
                                 'Number of Trades': number_of_trades,
@@ -715,6 +703,10 @@ if __name__ == '__main__':
         # Find the index of the maximum Sharpe Ratio in the validation set
         best_sharpe_index = sharpe_ratios.idxmax()
 
+        # if nan in the sharpe ratios, take the last one
+        if pd.isna(best_sharpe_index):
+            best_sharpe_index = agent.generation - 1
+
         # Extract the best result row
         best_result = backtest_results.loc[best_sharpe_index]
 
@@ -758,18 +750,6 @@ if __name__ == '__main__':
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-    indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-    return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
-    ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 

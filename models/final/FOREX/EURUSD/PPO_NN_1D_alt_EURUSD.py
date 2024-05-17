@@ -559,24 +559,24 @@ if __name__ == '__main__':
 
     # Training parameters
     leverage = 1  # 30
-    num_episodes = 5000
+    num_episodes = 50
 
     # Create an instance of the agent
     agent = PPO_Agent_NN_1D_alt_EURUSD(n_actions=3,  # sell, hold money, buy
-                                   input_dims=len(variables) * look_back+1,  # input dimensions
-                                   gamma=0.5,  # discount factor of future rewards
-                                   alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                   gae_lambda=0.5,  # lambda for generalized advantage estimation
-                                   policy_clip=0.25,  # clip parameter for PPO
-                                   entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                   ec_decay_rate=0.995,  # entropy coefficient decay rate
-                                   batch_size=1024,  # size of the memory
-                                   n_epochs=1,  # number of epochs
-                                   mini_batch_size=64,  # size of the mini-batches
-                                   weight_decay=0.0000005,  # weight decay
-                                   l1_lambda=1e-7,  # L1 regularization lambda
-                                   lr_decay_rate=0.999,  # learning rate decay rate
-                                   )
+                                       input_dims=len(variables) * look_back+1,  # input dimensions
+                                       gamma=0.5,  # discount factor of future rewards
+                                       alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                       gae_lambda=0.5,  # lambda for generalized advantage estimation
+                                       policy_clip=0.25,  # clip parameter for PPO
+                                       entropy_coefficient=10,  # higher entropy coefficient encourages exploration
+                                       ec_decay_rate=0.995,  # entropy coefficient decay rate
+                                       batch_size=1024,  # size of the memory
+                                       n_epochs=1,  # number of epochs
+                                       mini_batch_size=64,  # size of the mini-batches
+                                       weight_decay=0.0000005,  # weight decay
+                                       l1_lambda=1e-7,  # L1 regularization lambda
+                                       lr_decay_rate=0.999,  # learning rate decay rate
+                                       )
 
     total_rewards, episode_durations, total_balances = [], [], []
     episode_probabilities = {'train': [], 'validation': [], 'test': []}

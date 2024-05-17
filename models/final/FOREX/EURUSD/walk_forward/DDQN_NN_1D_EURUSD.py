@@ -617,6 +617,10 @@ if __name__ == '__main__':
         # Find the index of the maximum Sharpe Ratio in the validation set
         best_sharpe_index = sharpe_ratios.idxmax()
 
+        # if nan in the sharpe ratios, take the last one
+        if pd.isna(best_sharpe_index):
+            best_sharpe_index = agent.generation - 1
+
         # Extract the best result row
         best_result = backtest_results.loc[best_sharpe_index]
 
