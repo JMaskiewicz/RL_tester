@@ -536,18 +536,6 @@ if __name__ == '__main__':
         # Stock market variables
         df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-        indicators = [
-            {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-            {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
-            {"indicator": "MACD", "mkf": "EURUSD"},
-            {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-        return_indicators = [
-            {"price_type": "Close", "mkf": "EURUSD"},
-            {"price_type": "Close", "mkf": "USDJPY"},
-            {"price_type": "Close", "mkf": "EURJPY"},
-            {"price_type": "Close", "mkf": "GBPUSD"},
-        ]
         add_indicators(df, indicators)
         add_returns(df, return_indicators)
 
@@ -556,7 +544,6 @@ if __name__ == '__main__':
         df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
         df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
-        look_back = 20
         df = df.dropna()
 
         # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
@@ -803,18 +790,6 @@ if __name__ == '__main__':
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-    indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-    return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
-    ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
@@ -825,7 +800,6 @@ if __name__ == '__main__':
 
     add_time_sine_cosine(df, '1W')
 
-    look_back = 20
     df = df.dropna()
     df = df[test_date_2:end_date]
 

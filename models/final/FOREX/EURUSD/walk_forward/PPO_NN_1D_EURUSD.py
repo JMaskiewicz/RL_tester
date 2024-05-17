@@ -755,7 +755,6 @@ if __name__ == '__main__':
 
     add_time_sine_cosine(df, '1W')
 
-    look_back = 20
     df = df.dropna()
     df = df[test_date_2:end_date]
 

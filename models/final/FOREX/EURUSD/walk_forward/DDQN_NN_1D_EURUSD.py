@@ -406,24 +406,11 @@ if __name__ == '__main__':
 
         df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-        indicators = [
-            {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-            {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-            {"indicator": "MACD", "mkf": "EURUSD"},
-            {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-        return_indicators = [
-            {"price_type": "Close", "mkf": "EURUSD"},
-            {"price_type": "Close", "mkf": "USDJPY"},
-            {"price_type": "Close", "mkf": "EURJPY"},
-            {"price_type": "Close", "mkf": "GBPUSD"},
-        ]
         add_indicators(df, indicators)
         add_returns(df, return_indicators)
 
         add_time_sine_cosine(df, '1W')
 
-        look_back = 20
         df = df.dropna()
         df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:end_date]
 
@@ -663,24 +650,11 @@ if __name__ == '__main__':
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-    indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-    return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
-    ]
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
     add_time_sine_cosine(df, '1W')
 
-    look_back = 20
     df = df.dropna()
     df = df[test_date_2:end_date]
 
