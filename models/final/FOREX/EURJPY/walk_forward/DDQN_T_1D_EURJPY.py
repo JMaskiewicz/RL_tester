@@ -181,7 +181,7 @@ class DQNMemory:
         self.terminal_memory = np.zeros_like(self.terminal_memory)
 
 
-class DDQN_Agent_T_1D_EURUSD:
+class DDQN_Agent_T_1D_EURJPY:
     def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001,
                  target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000,
                  batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1,
@@ -421,10 +421,10 @@ if __name__ == '__main__':
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
+        {"indicator": "RSI", "mkf": "EURJPY", "length": 14},
+        {"indicator": "ATR", "mkf": "EURJPY", "length": 24},
+        {"indicator": "MACD", "mkf": "EURJPY"},
+        {"indicator": "Stochastic", "mkf": "EURJPY"}, ]
 
     return_indicators = [
         {"price_type": "Close", "mkf": "EURUSD"},
@@ -465,8 +465,8 @@ if __name__ == '__main__':
             {"variable": ("Close", "EURUSD"), "edit": "standardize"},
             {"variable": ("Close", "EURJPY"), "edit": "standardize"},
             {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-            {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-            {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+            {"variable": ("RSI_14", "EURJPY"), "edit": "standardize"},
+            {"variable": ("ATR_24", "EURJPY"), "edit": "standardize"},
             # {"variable": ("sin_time_1W", ""), "edit": None},
             # {"variable": ("cos_time_1W", ""), "edit": None},
             {"variable": ("Returns_Close", "EURUSD"), "edit": None},
@@ -475,7 +475,7 @@ if __name__ == '__main__':
             {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
         ]
 
-        tradable_markets = 'EURUSD'
+        tradable_markets = 'EURJPY'
         window_size = '1Y'
         starting_balance = final_balance
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
@@ -486,7 +486,7 @@ if __name__ == '__main__':
         num_episodes = 5000  # 50
 
         # Instantiate the agent
-        agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
+        agent = DDQN_Agent_T_1D_EURJPY(input_dims=len(variables) * look_back,  # input dimensions
                            n_actions=3,  # buy, sell, hold
                            n_epochs=1,  # number of epochs 10
                            mini_batch_size=64,  # mini batch size 128

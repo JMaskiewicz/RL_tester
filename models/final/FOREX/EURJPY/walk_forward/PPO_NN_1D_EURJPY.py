@@ -177,7 +177,7 @@ class CriticNetwork(BaseNetwork):
         return q
 
 
-class PPO_Agent_NN_1D_EURUSD:
+class PPO_Agent_NN_1D_EURJPY:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
                  lr_decay_rate=0.99):
@@ -420,10 +420,10 @@ if __name__ == '__main__':
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
+        {"indicator": "RSI", "mkf": "EURJPY", "length": 14},
+        {"indicator": "ATR", "mkf": "EURJPY", "length": 24},
+        {"indicator": "MACD", "mkf": "EURJPY"},
+        {"indicator": "Stochastic", "mkf": "EURJPY"}, ]
 
     return_indicators = [
         {"price_type": "Close", "mkf": "EURUSD"},
@@ -464,8 +464,8 @@ if __name__ == '__main__':
             {"variable": ("Close", "EURUSD"), "edit": "standardize"},
             {"variable": ("Close", "EURJPY"), "edit": "standardize"},
             {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-            {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-            {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+            {"variable": ("RSI_14", "EURJPY"), "edit": "standardize"},
+            {"variable": ("ATR_24", "EURJPY"), "edit": "standardize"},
             # {"variable": ("sin_time_1W", ""), "edit": None},
             # {"variable": ("cos_time_1W", ""), "edit": None},
             {"variable": ("Returns_Close", "EURUSD"), "edit": None},
@@ -474,7 +474,7 @@ if __name__ == '__main__':
             {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
         ]
 
-        tradable_markets = 'EURUSD'
+        tradable_markets = 'EURJPY'
         window_size = '1Y'
         starting_balance = final_balance
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
@@ -485,7 +485,7 @@ if __name__ == '__main__':
         num_episodes = 7500  # 50
 
         # Create an instance of the agent
-        agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
+        agent = PPO_Agent_NN_1D_EURJPY(n_actions=3,  # sell, hold money, buy
                                        input_dims=len(variables) * look_back + 1,  # input dimensions
                                        gamma=0.5,  # discount factor of future rewards
                                        alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001

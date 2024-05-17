@@ -502,10 +502,10 @@ if __name__ == '__main__':
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
+        {"indicator": "RSI", "mkf": "EURJPY", "length": 14},
+        {"indicator": "ATR", "mkf": "EURJPY", "length": 36},
+        {"indicator": "MACD", "mkf": "EURJPY"},
+        {"indicator": "Stochastic", "mkf": "EURJPY"}, ]
 
     return_indicators = [
         {"price_type": "Close", "mkf": "EURUSD"},
@@ -519,7 +519,7 @@ if __name__ == '__main__':
     add_time_sine_cosine(df, '1W')
     df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
     df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+    df[("RSI_14", "EURJPY")] = df[("RSI_14", "EURJPY")] / 100
 
     look_back = 20
     df = df.dropna()
@@ -542,7 +542,7 @@ if __name__ == '__main__':
         add_time_sine_cosine(df, '1W')
         df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
         df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-        df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+        df[("RSI_14", "EURJPY")] = df[("RSI_14", "EURJPY")] / 100
 
         df = df.dropna()
 
@@ -557,12 +557,12 @@ if __name__ == '__main__':
             {"variable": ("Close", "EURUSD"), "edit": "normalize"},
             {"variable": ("Close", "EURJPY"), "edit": "normalize"},
             {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-            {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-            {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
-            {"variable": ("K%", "EURUSD"), "edit": "standardize"},
-            {"variable": ("D%", "EURUSD"), "edit": "standardize"},
-            {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
-            {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+            {"variable": ("RSI_14", "EURJPY"), "edit": "standardize"},
+            {"variable": ("ATR_36", "EURJPY"), "edit": "standardize"},
+            {"variable": ("K%", "EURJPY"), "edit": "standardize"},
+            {"variable": ("D%", "EURJPY"), "edit": "standardize"},
+            {"variable": ("MACD_Line", "EURJPY"), "edit": "standardize"},
+            {"variable": ("Signal_Line", "EURJPY"), "edit": "standardize"},
             #{"variable": ("cos_time_1W", ""), "edit": None},
             {"variable": ("Returns_Close", "EURUSD"), "edit": None},
             {"variable": ("Returns_Close", "USDJPY"), "edit": None},
@@ -570,7 +570,7 @@ if __name__ == '__main__':
             {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
         ]
 
-        tradable_markets = 'EURUSD'
+        tradable_markets = 'EURJPY'
         window_size = '1Y'
         starting_balance = final_balance
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
@@ -796,7 +796,7 @@ if __name__ == '__main__':
     add_time_sine_cosine(df, '1W')
     df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
     df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+    df[("RSI_14", "EURJPY")] = df[("RSI_14", "EURJPY")] / 100
 
     add_time_sine_cosine(df, '1W')
 

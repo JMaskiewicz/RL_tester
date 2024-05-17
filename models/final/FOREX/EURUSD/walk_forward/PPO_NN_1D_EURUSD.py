@@ -487,9 +487,9 @@ if __name__ == '__main__':
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
                                        input_dims=len(variables) * look_back + 1,  # input dimensions
-                                       gamma=0.5,  # discount factor of future rewards
+                                       gamma=0.75,  # discount factor of future rewards
                                        alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                       gae_lambda=0.7,  # lambda for generalized advantage estimation
+                                       gae_lambda=0.75,  # lambda for generalized advantage estimation
                                        policy_clip=0.25,  # clip parameter for PPO
                                        entropy_coefficient=10,  # higher entropy coefficient encourages exploration
                                        ec_decay_rate=0.996,  # entropy coefficient decay rate
