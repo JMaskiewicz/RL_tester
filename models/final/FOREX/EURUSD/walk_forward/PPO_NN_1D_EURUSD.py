@@ -90,6 +90,14 @@ class PPOMemory:
         self.clear_memory()
         self.device = device
 
+    # TODO try to implement this function
+    """
+    def generate_batches(self):
+    indices = torch.arange(len(self.states), dtype=torch.int64)
+    batches = torch.split(indices, self.batch_size)
+    return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
+
+    """
     def generate_batches(self):
         n_states = len(self.states)
         batch_start = torch.arange(0, n_states, self.batch_size)
@@ -123,109 +131,49 @@ class PPOMemory:
         self.dones = torch.cat(self.dones, dim=0).to(self.device)
 
 
-class ActorNetwork(nn.Module):
-    def __init__(self, n_actions, input_dims, dropout_rate=1/5):
-        super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, n_actions)
+class BaseNetwork(nn.Module):
+    def __init__(self, input_dims, output_dims, dropout_rate=0.2):
+        super(BaseNetwork, self).__init__()
+        self.layers = nn.ModuleList()
+        self.batch_norms = nn.ModuleList()
+
+        layer_dims = [2048, 1024, 512, 256, 128]
+        for i in range(len(layer_dims)):
+            self.layers.append(nn.Linear(input_dims if i == 0 else layer_dims[i-1], layer_dims[i]))
+            self.batch_norms.append(nn.BatchNorm1d(layer_dims[i]))
+
+        self.final_layer = nn.Linear(layer_dims[-1], output_dims)
         self.relu = nn.LeakyReLU()
         self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, state):
+        x = state
+        for layer, bn in zip(self.layers, self.batch_norms):
+            x = layer(x)
+            if x.size(0) > 1:  # Apply batch normalization only if batch size > 1
+                x = bn(x)
+            x = self.relu(x)
+            x = self.dropout(x)
+        return x
+
+class ActorNetwork(BaseNetwork):
+    def __init__(self, n_actions, input_dims, dropout_rate=0.2):
+        super(ActorNetwork, self).__init__(input_dims, n_actions, dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc6(x)
+        x = super(ActorNetwork, self).forward(state)
+        x = self.final_layer(x)
         x = self.softmax(x)
         return x
 
-
-class CriticNetwork(nn.Module):
-    def __init__(self, input_dims, dropout_rate=1/5):
-        super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 2048)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.fc3 = nn.Linear(1024, 512)
-        self.bn3 = nn.BatchNorm1d(512)
-        self.fc4 = nn.Linear(512, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc5 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc6 = nn.Linear(128, 1)
-        self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
+class CriticNetwork(BaseNetwork):
+    def __init__(self, input_dims, dropout_rate=0.2):
+        super(CriticNetwork, self).__init__(input_dims, 1, dropout_rate)
 
     def forward(self, state):
-        x = self.fc1(state)
-        if x.size(0) > 1:
-            x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc2(x)
-        if x.size(0) > 1:
-            x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc3(x)
-        if x.size(0) > 1:
-            x = self.bn3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc4(x)
-        if x.size(0) > 1:
-            x = self.bn4(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        x = self.fc5(x)
-        if x.size(0) > 1:
-            x = self.bn5(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-
-        q = self.fc6(x)
+        x = super(CriticNetwork, self).forward(state)
+        q = self.final_layer(x)
         return q
 
 
