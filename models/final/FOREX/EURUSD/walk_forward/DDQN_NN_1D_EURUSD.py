@@ -710,6 +710,7 @@ if __name__ == '__main__':
                              'buy and hold sharpe ratio':   bah_results_prepared[('BAH',    'Sharpe Ratio')][0]})
 
     print(f"Final Balance: {final_balance:.2f}")
-    # 12814
+    # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
+    # 12100 good one
     print(statistic_report)
     print('end')
