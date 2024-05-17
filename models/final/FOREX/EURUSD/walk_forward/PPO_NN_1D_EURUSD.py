@@ -549,10 +549,9 @@ if __name__ == '__main__':
         leverage = 1
         num_episodes = 50  # 50
 
-
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
-                                       input_dims=len(variables) * look_back+1,  # input dimensions
+                                       input_dims=len(variables) * look_back + 1,  # input dimensions
                                        gamma=0.5,  # discount factor of future rewards
                                        alpha=0.00005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
                                        gae_lambda=0.7,  # lambda for generalized advantage estimation
@@ -628,18 +627,17 @@ if __name__ == '__main__':
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         futures = []
                         for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                            future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
+                            future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, 'EURUSD', look_back,
                                                      variables, provision, starting_balance, leverage,
                                                      Trading_Environment_Basic, reward_calculation)
                             futures.append((future, label))
 
                         for future, label in futures:
                             (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown,
-                             sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum) = future.result()
+                             sortino_ratio, calmar_ratio, cumulative_returns, balances) = future.result()
                             result_data = {
                                 'Agent generation': agent.generation,
                                 'Label': label,
-                                'Provision_sum': provision_sum,
                                 'Final Balance': balance,
                                 'Total Reward': total_reward,
                                 'Number of Trades': number_of_trades,
@@ -675,6 +673,7 @@ if __name__ == '__main__':
                         window_df[('Close', tradable_markets)].iloc[-1] - window_df[('Close', tradable_markets)].iloc[
                     look_back]) / window_df[('Close', tradable_markets)].iloc[look_back] * leverage))
             # TODO do this as cached function with benchmark agents and df as input
+
         buy_and_hold_agent = Buy_and_hold_Agent()
         sell_and_hold_agent = Sell_and_hold_Agent()
         # TODO
