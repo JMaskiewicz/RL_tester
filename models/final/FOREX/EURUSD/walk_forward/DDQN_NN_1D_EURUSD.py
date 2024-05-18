@@ -664,12 +664,12 @@ if __name__ == '__main__':
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
         buy_and_hold_agent, 'BAH', [df_2], ['final_test'],
-        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, 10000, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
         sell_and_hold_agent, 'SAH', [df_2], ['final_test'],
-        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, 10000, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
