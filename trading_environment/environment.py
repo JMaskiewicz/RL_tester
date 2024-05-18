@@ -15,6 +15,7 @@ class Trading_Environment_Basic(gym.Env):
         self.look_back = look_back  # Number of time steps to look back
         self.initial_balance = initial_balance  # Initial balance
         self.capital_investment = 0
+        self.open_price = 1
 
         self.reward_sum = 0  # Initialize the reward sum
         self.current_position = 0  # This is a static part of the state
@@ -88,8 +89,6 @@ class Trading_Environment_Basic(gym.Env):
         current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
         next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
-        # balance update
-        market_return = next_price / current_price - 1
         provision_cost = 0
 
         # Provision cost calculation if the position has changed
@@ -97,9 +96,15 @@ class Trading_Environment_Basic(gym.Env):
             self.capital_investment = self.balance
             provision_cost -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
             self.provision_sum -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
+            self.open_price = current_price
+
+        # balance update
+        market_return = (next_price - current_price) * action / self.open_price if self.open_price != 0 else 0
+
+        provision_cost = 0
 
         # Update the balance
-        self.balance += (market_return * action) * self.capital_investment * self.leverage - provision_cost
+        self.balance += market_return * self.capital_investment * self.leverage - provision_cost
 
         # reward calculation with reward function on the top of the file (reward_calculation)
         final_reward = self.reward_function(current_price, next_price, self.current_position, action, self.leverage, self.provision)

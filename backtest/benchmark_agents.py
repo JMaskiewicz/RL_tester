@@ -57,7 +57,7 @@ class Yearly_Perfect_Agent:
         self.current_step += 1
         return action_probs
 
-
+# tests
 if __name__ == '__main__':
     # test the agents
     from trading_environment.environment import Trading_Environment_Basic
@@ -203,3 +203,15 @@ if __name__ == '__main__':
     print("Benchmark Sell and Hold Agent final reward:", sah_results_prepared[('SAH', 'Total Reward')][0])
     print("Perfect Hold Agent final results:", ph_results_prepared[('PH', 'Final Balance')][0])
     print("Benchmark Perfect Hold Agent final reward:", ph_results_prepared[('PH', 'Total Reward')][0])
+
+    first_close = df_2.loc[:, ('Close', 'EURUSD')].iloc[look_back]
+    last_close = df_2.loc[:, ('Close', 'EURUSD')].iloc[-1]
+    return_percentage = ((last_close - first_close) / first_close) * 100
+
+    # Calculate the final investment value
+    final_investment_value = (1 + (return_percentage - provision / 100)) * starting_balance
+
+    # Output the final value
+    print("Final Investment Value:", final_investment_value)
+
+
