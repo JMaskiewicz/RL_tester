@@ -10,6 +10,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
+def calculate_drawdown_duration(drawdown):
+    # Identifying the drawdown periods
+    is_drawdown = drawdown < 0
+    # Start a new group every time there is a change from drawdown to non-drawdown
+    drawdown_groups = is_drawdown.ne(is_drawdown.shift()).cumsum()
+    # Filter out only the drawdown periods
+    drawdown_periods = drawdown_groups[is_drawdown]
+    # Count consecutive indexes in each drawdown period
+    drawdown_durations = drawdown_periods.groupby(drawdown_periods).transform('count')
+    # The longest duration of drawdown
+    max_drawdown_duration = drawdown_durations.max()
+    return max_drawdown_duration
+
 @get_time
 def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, currency_pair, look_back,
                     variables, provision, starting_balance, leverage, Trading_Environment_Class, reward_calculation,
@@ -21,6 +34,7 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = []
         for df, label in zip(datasets, labels):
+            # Pass parameters properly to the backtest_wrapper function.
             future = executor.submit(backtest_wrapper, agent_type, df, agent, currency_pair, look_back,
                                      variables, provision, starting_balance, leverage,
                                      Trading_Environment_Class, reward_calculation)
@@ -28,11 +42,11 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
 
         for future, label in futures:
             result = future.result()
-            balance, total_reward, number_of_trades = result[:3]
-            probabilities_df, action_df = result[3], result[4]
-            sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio = result[5:9]
-            provision_sum = result[11]
-            balances = result[10]
+            balance, total_reward, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, \
+            sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
+            average_trade_duration, in_long, in_short, in_out_of_market = result
+
+            # Update result_data with all required metrics
             result_data = {
                 'Agent generation': agent.generation,
                 'Agent Type': agent_type,
@@ -44,7 +58,12 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
                 'Sharpe Ratio': sharpe_ratio,
                 'Max Drawdown': max_drawdown,
                 'Sortino Ratio': sortino_ratio,
-                'Calmar Ratio': calmar_ratio
+                'Calmar Ratio': calmar_ratio,
+                'Max Drawdown Duration': max_drawdown_duration,
+                'Average Trade Duration': average_trade_duration,
+                'In Long': in_long,
+                'In Short': in_short,
+                'In Out of the Market': in_out_of_market,
             }
 
             key = (agent.generation, label)
@@ -102,6 +121,7 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     peak = cumulative_returns.expanding(min_periods=1).max()
     drawdown = (cumulative_returns - peak) / peak
     max_drawdown = drawdown.min()
+    max_drawdown_duration = calculate_drawdown_duration(drawdown)
 
     negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)
     sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
@@ -113,6 +133,14 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     probabilities_df = pd.DataFrame(action_probabilities_list, columns=['Short', 'Neutral', 'Long'])
     action_df = pd.DataFrame(best_action_list, columns=['Action'])
 
+    action_df['Action'] = action_df['Action'].map({-1: 'Short', 0: 'Neutral', 1: 'Long'})
+    num_trades, average_trade_duration = calculate_number_of_trades_and_duration(df, action_df['Action'])
+
+    # Calculate the number of times the agent was in long, short, or out of the market
+    in_long = action_df[action_df['Action'] == 1].shape[0]
+    in_short = action_df[action_df['Action'] == -1].shape[0]
+    in_out_of_market = action_df[action_df['Action'] == 0].shape[0]
+
     # Ensure the agent's networks are reverted back to training mode
     if agent_type == 'PPO':
         agent.actor.train()
@@ -120,18 +148,15 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     elif agent_type == 'DQN':
         agent.q_policy.train()
 
-    return env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum
+    return (env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown,
+            sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration,
+            average_trade_duration, in_long, in_short, in_out_of_market)
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """
     # TODO add description
     """
     return generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic, reward_function)
-
-
-
-
-
 
 
 def calculate_number_of_trades_and_duration(df, action_column):
@@ -177,6 +202,8 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     drawdown = (cumulative_returns - peak) / peak
     max_drawdown = drawdown.min()
 
+    max_drawdown_duration = calculate_drawdown_duration(drawdown)
+
     # Calculate Sortino Ratio
     negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - look_back)
     sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
@@ -198,7 +225,7 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
         'Sharpe Ratio': sharpe_ratio,
         'Sortino Ratio': sortino_ratio,
         'Max Drawdown': max_drawdown,
-        'Max Drawdown Duration': drawdown.idxmin(),
+        'Max Drawdown Duration': max_drawdown_duration,
         'Calmar Ratio': calmar_ratio,
         'Number of Trades': num_trades,
         'Average trade duration': avg_duration,
