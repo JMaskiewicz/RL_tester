@@ -483,7 +483,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 50  # 50
+        num_episodes = 5000  # 50
 
         # Instantiate the agent
         agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
@@ -695,7 +695,6 @@ if __name__ == '__main__':
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
-
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
 
@@ -730,6 +729,7 @@ if __name__ == '__main__':
     statistic_report = BF.generate_result_statistics(final_test_results, f'{agent.get_name()}_Action',
                                                      f'{agent.get_name()}_Balances', provision_sum_test_final,
                                                      look_back=look_back)
+
     statistic_report.update({'sell and hold final balance': sah_results_prepared[('SAH', 'Final Balance')][0],
                              'buy and hold final balance': bah_results_prepared[('BAH', 'Final Balance')][0],
                              'sell and hold sharpe ratio': sah_results_prepared[('SAH', 'Sharpe Ratio')][0],

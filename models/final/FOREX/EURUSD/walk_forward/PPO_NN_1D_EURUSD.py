@@ -128,7 +128,7 @@ class BaseNetwork(nn.Module):
         self.layers = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
 
-        layer_dims = [2048, 1024, 512, 256, 128]
+        layer_dims = [1024, 512, 256]
         for i in range(len(layer_dims)):
             self.layers.append(nn.Linear(input_dims if i == 0 else layer_dims[i-1], layer_dims[i]))
             self.batch_norms.append(nn.BatchNorm1d(layer_dims[i]))
@@ -457,8 +457,8 @@ if __name__ == '__main__':
             {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
             {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
             {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-            # {"variable": ("sin_time_1W", ""), "edit": None},
-            # {"variable": ("cos_time_1W", ""), "edit": None},
+            {"variable": ("sin_time_1W", ""), "edit": None},
+            {"variable": ("cos_time_1W", ""), "edit": None},
             {"variable": ("Returns_Close", "EURUSD"), "edit": None},
             {"variable": ("Returns_Close", "USDJPY"), "edit": None},
             {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -473,7 +473,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 7500  # 50
+        num_episodes = 5000  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
@@ -732,4 +732,10 @@ if __name__ == '__main__':
     # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
     # 12100 good one
     print(statistic_report)
+    statistic_report = pd.DataFrame([statistic_report])
+    #statistic_report.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\statistic_report_{agent.get_name()}.csv', index=False)
+
+    # Save final_test_results to a CSV file
+    #final_test_results.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\final_test_results_{agent.get_name()}.csv', index=False)
+
     print('end')

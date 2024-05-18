@@ -656,19 +656,19 @@ if __name__ == '__main__':
     add_time_sine_cosine(df, '1W')
 
     df = df.dropna()
-    df = df[test_date_2:end_date]
+    df_2 = df[test_date_2:end_date]
 
     buy_and_hold_agent = Buy_and_hold_Agent()
     sell_and_hold_agent = Sell_and_hold_Agent()
 
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
-        buy_and_hold_agent, 'BAH', [df], ['final_test'],
+        buy_and_hold_agent, 'BAH', [df_2], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
-        sell_and_hold_agent, 'SAH', [df], ['final_test'],
+        sell_and_hold_agent, 'SAH', [df_2], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
@@ -690,5 +690,12 @@ if __name__ == '__main__':
     print(f"Final Balance: {final_balance:.2f}")
     # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
     # 12100 good one
+
+    statistic_report = pd.DataFrame([statistic_report])
+    #statistic_report.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\statistic_report_{agent.get_name()}.csv', index=False)
+
+    # Save final_test_results to a CSV file
+    #final_test_results.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\final_test_results_{agent.get_name()}.csv', index=False)
+
     print(statistic_report)
     print('end')

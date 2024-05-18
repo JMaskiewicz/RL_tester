@@ -216,7 +216,7 @@ class CriticNetwork(nn.Module):
         return x
 
 
-class Transformer_PPO_Agent:
+class PPO_Agent_T_1D_EURUSD:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
                  static_input_dims=1, lr_decay_rate=0.99):
@@ -563,7 +563,7 @@ if __name__ == '__main__':
             {"variable": ("D%", "EURUSD"), "edit": "standardize"},
             {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
             {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
-            #{"variable": ("cos_time_1W", ""), "edit": None},
+            {"variable": ("cos_time_1W", ""), "edit": None},
             {"variable": ("Returns_Close", "EURUSD"), "edit": None},
             {"variable": ("Returns_Close", "USDJPY"), "edit": None},
             {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -578,10 +578,10 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 7500  # 50
+        num_episodes = 5000  # 50
 
         # Create an instance of the agent
-        agent = Transformer_PPO_Agent(n_actions=3,  # sell, hold money, buy
+        agent = PPO_Agent_T_1D_EURUSD(n_actions=3,  # sell, hold money, buy
                                       input_dims=len(variables) * look_back,  # input dimensions
                                       gamma=0.75,  # discount factor of future rewards
                                       alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
