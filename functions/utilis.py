@@ -29,48 +29,50 @@ def generate_index_labels(rolling_datasets, dataset_type):
     return index_labels
 
 def prepare_backtest_results(backtest_results, agent_name):
-    agent_generations = []
-    labels = []
-    final_balances = []
-    total_rewards = []
-    number_of_trades = []
-    sharpe_ratios = []
-    max_drawdowns = []
-    sortino_ratios = []
-    calmar_ratios = []
-    agent_names = []
-    provision_sums = []
+    # Prepare lists to collect all data
+    data = {
+        'Agent Generation': [],
+        'Agent Name': [],
+        'Label': [],
+        'Provision Sum': [],
+        'Final Balance': [],
+        'Total Reward': [],
+        'Number of Trades': [],
+        'Sharpe Ratio': [],
+        'Max Drawdown': [],
+        'Sortino Ratio': [],
+        'Calmar Ratio': [],
+        'Average Trade Duration': [],
+        'Max Drawdown Duration': [],
+        'In Long': [],
+        'In Short': [],
+        'Out of Market': []
+    }
 
-    # Iterating over each record in the dataset
-    for (agent_gen, label), metrics in backtest_results.items():
-        for metric in metrics:
-            agent_generations.append(agent_gen)
-            labels.append(label)
-            agent_names.append(agent_name)
-            final_balances.append(metric['Final Balance'])
-            total_rewards.append(metric['Total Reward'])
-            number_of_trades.append(metric['Number of Trades'])
-            sharpe_ratios.append(metric['Sharpe Ratio'])
-            max_drawdowns.append(metric['Max Drawdown'])
-            sortino_ratios.append(metric['Sortino Ratio'])
-            calmar_ratios.append(metric['Calmar Ratio'])
-            provision_sums.append(metric['Provision_sum'])
+    # Extract data from backtest_results and append to lists
+    for (agent_gen, label), metrics_list in backtest_results.items():
+        for metrics in metrics_list:
+            data['Agent Generation'].append(agent_gen)
+            data['Label'].append(label)
+            data['Agent Name'].append(agent_name)
+            data['Provision Sum'].append(metrics.get('Provision_sum', 0))
+            data['Final Balance'].append(metrics.get('Final Balance', 0))
+            data['Total Reward'].append(metrics.get('Total Reward', 0))
+            data['Number of Trades'].append(metrics.get('Number of Trades', 0))
+            data['Sharpe Ratio'].append(metrics.get('Sharpe Ratio', 0))
+            data['Max Drawdown'].append(metrics.get('Max Drawdown', 0))
+            data['Sortino Ratio'].append(metrics.get('Sortino Ratio', 0))
+            data['Calmar Ratio'].append(metrics.get('Calmar Ratio', 0))
+            data['Average Trade Duration'].append(metrics.get('Average Trade Duration', 0))
+            data['Max Drawdown Duration'].append(metrics.get('Max Drawdown Duration', 0))
+            data['In Long'].append(metrics.get('In Long', 0))
+            data['In Short'].append(metrics.get('In Short', 0))
+            data['Out of Market'].append(metrics.get('Out of Market', 0))
 
     # Creating a DataFrame from the lists
-    df = pd.DataFrame({
-        'Agent Generation': agent_generations,
-        'Agent Name': agent_name,
-        'Label': labels,
-        'Provision Sum': provision_sums,
-        'Final Balance': final_balances,
-        'Total Reward': total_rewards,
-        'Number of Trades': number_of_trades,
-        'Sharpe Ratio': sharpe_ratios,
-        'Max Drawdown': max_drawdowns,
-        'Sortino Ratio': sortino_ratios,
-        'Calmar Ratio': calmar_ratios,
-    })
+    df = pd.DataFrame(data)
 
+    # Adjusting the DataFrame to have a MultiIndex column for better organization if needed
     columns = [(df['Agent Name'].iloc[0], col) if col not in ['Label', 'Agent Generation'] else ('', col) for col in df.columns]
     multi_index = pd.MultiIndex.from_tuples(columns)
     df.columns = multi_index

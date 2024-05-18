@@ -139,9 +139,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     num_trades, average_trade_duration = calculate_number_of_trades_and_duration(action_df['Action'])
 
     # Calculate the number of times the agent was in long, short, or out of the market
-    in_long = action_df[action_df['Action'] == 'Long'].shape[0]
-    in_short = action_df[action_df['Action'] == 'Short'].shape[0]
-    in_out_of_market = action_df[action_df['Action'] == 'Neutral'].shape[0]
+    in_long = action_df[action_df['Action'] == 'Long'].shape[0] / (len(df) - env.look_back)
+    in_short = action_df[action_df['Action'] == 'Short'].shape[0] / (len(df) - env.look_back)
+    in_out_of_market = action_df[action_df['Action'] == 'Neutral'].shape[0] / (len(df) - env.look_back)
 
     # Ensure the agent's networks are reverted back to training mode
     if agent_type == 'PPO':
