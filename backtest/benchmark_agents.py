@@ -120,6 +120,13 @@ if __name__ == '__main__':
     np.random.seed(0)
     random.seed(0)
 
+    tradable_markets = 'EURUSD'
+    starting_balance = 10000
+    look_back = 20
+    provision = 0
+    leverage = 1
+
+    # final results for the agent
     # Example usage
     df = load_data_parallel(['EURUSD'], '1D')
 
@@ -132,16 +139,32 @@ if __name__ == '__main__':
         {"variable": ("Close", "EURUSD"), "edit": None},
     ]
 
-    tradable_markets = 'EURUSD'
-    starting_balance = 10000
-    look_back = 20
-    provision = 0.0001
-    leverage = 1
-
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:'2024-01-01']
 
     df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
     df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
+
+    buy_and_hold_agent = Buy_and_hold_Agent()
+    sell_and_hold_agent = Sell_and_hold_Agent()
+
+    # Run backtesting for both agents
+    bah_results, _, benchmark_BAH = BF.run_backtesting(
+        buy_and_hold_agent, 'BAH', [df_test], ['final_test'],
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
+
+    sah_results, _, benchmark_SAH = BF.run_backtesting(
+        sell_and_hold_agent, 'SAH', [df_test], ['final_test'],
+        BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
+        Trading_Environment_Basic, reward_calculation, workers=4)
+
+    bah_results_prepared = prepare_backtest_results(bah_results, 'BAH')
+    sah_results_prepared = prepare_backtest_results(sah_results, 'SAH')
+
+    sah_results_prepared = sah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
+    bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
+                                                     axis=1)  # drop the agent generation column
 
     perfect_agent = Yearly_Perfect_Agent(df_test, action_size=3)  # PH - perfect hold
 
@@ -152,3 +175,10 @@ if __name__ == '__main__':
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     ph_results_prepared = prepare_backtest_results(ph_results, 'PH')
+
+    print("Buy and Hold Agent final results:", bah_results_prepared[('BAH', 'Final Balance')][0])
+    print("Benchmark Buy and Hold Agent final reward:", bah_results_prepared[('BAH', 'Total Reward')][0])
+    print("Sell and Hold Agent final results:", sah_results_prepared[('SAH', 'Final Balance')][0])
+    print("Benchmark Sell and Hold Agent final reward:", sah_results_prepared[('SAH', 'Total Reward')][0])
+    print("Perfect Hold Agent final results:", ph_results_prepared[('PH', 'Final Balance')][0])
+    print("Benchmark Perfect Hold Agent final reward:", ph_results_prepared[('PH', 'Total Reward')][0])

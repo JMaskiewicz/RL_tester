@@ -14,6 +14,8 @@ class Trading_Environment_Basic(gym.Env):
         self.df = df.reset_index(drop=True)  # Reset the index of the DataFrame
         self.look_back = look_back  # Number of time steps to look back
         self.initial_balance = initial_balance  # Initial balance
+        self.capital_investment = 0
+
         self.reward_sum = 0  # Initialize the reward sum
         self.current_position = 0  # This is a static part of the state
         self.variables = variables  # List of variables to be used in the environment
@@ -88,17 +90,16 @@ class Trading_Environment_Basic(gym.Env):
 
         # balance update
         market_return = next_price / current_price - 1
+        provision_cost = 0
 
         # Provision cost calculation if the position has changed
         if action != self.current_position:
-            provision_cost = self.provision * (abs(action) == 1)
-            self.balance += (- provision_cost) * self.balance * self.leverage   # initial balance
-            self.provision_sum += (- provision_cost) * self.initial_balance * self.leverage
-        else:
-            provision_cost = 0
+            self.capital_investment = self.balance
+            provision_cost -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
+            self.provision_sum -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
 
         # Update the balance
-        self.balance += (market_return * action) * self.balance * self.leverage  # initial balance
+        self.balance += (market_return * action) * self.capital_investment * self.leverage - provision_cost
 
         # reward calculation with reward function on the top of the file (reward_calculation)
         final_reward = self.reward_function(current_price, next_price, self.current_position, action, self.leverage, self.provision)
