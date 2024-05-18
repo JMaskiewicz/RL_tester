@@ -101,10 +101,8 @@ class Trading_Environment_Basic(gym.Env):
         # balance update
         market_return = (next_price - current_price) * action / self.open_price if self.open_price != 0 else 0
 
-        provision_cost = 0
-
         # Update the balance
-        self.balance += market_return * self.capital_investment * self.leverage - provision_cost
+        self.balance += market_return * self.capital_investment * self.leverage + provision_cost
 
         # reward calculation with reward function on the top of the file (reward_calculation)
         final_reward = self.reward_function(current_price, next_price, self.current_position, action, self.leverage, self.provision)

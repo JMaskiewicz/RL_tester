@@ -123,46 +123,26 @@ if __name__ == '__main__':
     tradable_markets = 'EURUSD'
     starting_balance = 10000
     look_back = 20
-    provision = 0
+    provision = 0.0001
     leverage = 1
 
     # final results for the agent
     # Example usage
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
-
-    indicators = [
-        {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
-        {"indicator": "MACD", "mkf": "EURUSD"},
-        {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
-
-    return_indicators = [
-        {"price_type": "Close", "mkf": "EURUSD"},
-        {"price_type": "Close", "mkf": "USDJPY"},
-        {"price_type": "Close", "mkf": "EURJPY"},
-        {"price_type": "Close", "mkf": "GBPUSD"},
-    ]
-    add_indicators(df, indicators)
-    add_returns(df, return_indicators)
-
-    add_time_sine_cosine(df, '1W')
+    df = load_data_parallel(['EURUSD'], '1D')
 
     df = df.dropna()
-    df_2 = df['2019-01-01':'2025-01-01']
+
+    start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
+    validation_date = '2017-12-31'
+    test_date = '2019-01-01'
+
+    df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
+                                                                                                      test_date:'2025-01-01']
+    df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
+    df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
         {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        # {"variable": ("sin_time_1W", ""), "edit": None},
-        # {"variable": ("cos_time_1W", ""), "edit": None},
-        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
     ]
 
     buy_and_hold_agent = Buy_and_hold_Agent()
@@ -170,12 +150,12 @@ if __name__ == '__main__':
 
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
-        buy_and_hold_agent, 'BAH', [df_2], ['final_test'],
+        buy_and_hold_agent, 'BAH', [df_test], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
-        sell_and_hold_agent, 'SAH', [df_2], ['final_test'],
+        sell_and_hold_agent, 'SAH', [df_test], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
@@ -187,15 +167,18 @@ if __name__ == '__main__':
     bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
                                                      axis=1)  # drop the agent generation column
 
-    perfect_agent = Yearly_Perfect_Agent(df_2, action_size=3)  # PH - perfect hold
+    perfect_agent = Yearly_Perfect_Agent(df_test, action_size=3)  # PH - perfect hold
 
     # Run backtesting for both agents
     ph_results, _, benchmark_ph = BF.run_backtesting(
-        perfect_agent, 'PH', [df_2], ['test'],
+        perfect_agent, 'PH', [df_test], ['test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     ph_results_prepared = prepare_backtest_results(ph_results, 'PH')
+
+
+
 
     print("Buy and Hold Agent final results:", bah_results_prepared[('BAH', 'Final Balance')][0])
     print("Benchmark Buy and Hold Agent final reward:", bah_results_prepared[('BAH', 'Total Reward')][0])
@@ -204,14 +187,25 @@ if __name__ == '__main__':
     print("Perfect Hold Agent final results:", ph_results_prepared[('PH', 'Final Balance')][0])
     print("Benchmark Perfect Hold Agent final reward:", ph_results_prepared[('PH', 'Total Reward')][0])
 
-    first_close = df_2.loc[:, ('Close', 'EURUSD')].iloc[look_back]
-    last_close = df_2.loc[:, ('Close', 'EURUSD')].iloc[-1]
+    first_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[look_back]
+    last_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[-1]
     return_percentage = ((last_close - first_close) / first_close) * 100
 
     # Calculate the final investment value
-    final_investment_value = (1 + (return_percentage - provision / 100)) * starting_balance
+    final_investment_value = (1 + (return_percentage / 100)) * starting_balance
 
     # Output the final value
     print("Final Investment Value:", final_investment_value)
 
+    for column in bah_results_prepared.columns:
+        if len(bah_results_prepared[column]) > 0:
+            print(f"{column}: {bah_results_prepared[column][0]}")
+
+    for column in sah_results_prepared.columns:
+        if len(sah_results_prepared[column]) > 0:
+            print(f"{column}: {sah_results_prepared[column][0]}")
+
+    for column in ph_results_prepared.columns:
+        if len(ph_results_prepared[column]) > 0:
+            print(f"{column}: {ph_results_prepared[column][0]}")
 
