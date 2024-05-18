@@ -578,7 +578,7 @@ if __name__ == '__main__':
 
         # Environment parameters
         leverage = 1
-        num_episodes = 5000  # 50
+        num_episodes = 5  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_T_1D_EURUSD(n_actions=3,  # sell, hold money, buy
@@ -653,15 +653,24 @@ if __name__ == '__main__':
                 if generation < agent.generation:
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         futures = []
+                        # Combine validation and test datasets and labels for processing
                         for df, label in zip(val_rolling_datasets + test_rolling_datasets, val_labels + test_labels):
-                            future = executor.submit(BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
-                                                     variables, provision, starting_balance, leverage,
-                                                     Trading_Environment_Basic, reward_calculation)
+                            future = executor.submit(
+                                BF.backtest_wrapper, 'PPO', df, agent, tradable_markets, look_back,
+                                variables, provision, starting_balance, leverage,
+                                Trading_Environment_Basic, reward_calculation
+                            )
                             futures.append((future, label))
 
+                        # Process futures as they complete
                         for future, label in futures:
-                            (balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown,
-                             sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum) = future.result()
+                            result = future.result()
+                            # Make sure to update these variables to match the exact structure of the data being returned
+                            balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, \
+                                sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
+                                average_trade_duration, in_long, in_short, in_out_of_market = result
+
+                            # Populate a dictionary with the results
                             result_data = {
                                 'Agent generation': agent.generation,
                                 'Label': label,
@@ -672,18 +681,18 @@ if __name__ == '__main__':
                                 'Sharpe Ratio': sharpe_ratio,
                                 'Max Drawdown': max_drawdown,
                                 'Sortino Ratio': sortino_ratio,
-                                'Calmar Ratio': calmar_ratio
+                                'Calmar Ratio': calmar_ratio,
+                                'Max Drawdown Duration': max_drawdown_duration,
+                                'Average Trade Duration': average_trade_duration,
+                                'In Long': in_long,
+                                'In Short': in_short,
+                                'In Out of the Market': in_out_of_market,
                             }
+
                             key = (agent.generation, label)
-
-                            if key not in backtest_results:
-                                backtest_results[key] = []
-
-                            backtest_results[key].append(result_data)
-
-                            # Store probabilities and balances for plotting
-                            probs_dfs[(agent.generation, label)] = probs_df
-                            balances_dfs[(agent.generation, label)] = balances
+                            backtest_results.setdefault(key, []).append(result_data)
+                            probs_dfs[key] = probs_df
+                            balances_dfs[key] = balances
 
                         generation = agent.generation
                         print(f"Backtesting completed for {agent.get_name()} generation {generation}")

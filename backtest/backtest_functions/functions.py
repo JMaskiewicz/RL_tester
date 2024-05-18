@@ -139,9 +139,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     num_trades, average_trade_duration = calculate_number_of_trades_and_duration(action_df['Action'])
 
     # Calculate the number of times the agent was in long, short, or out of the market
-    in_long = action_df[action_df['Action'] == 'Long'].shape[0] / (len(df) - env.look_back)
-    in_short = action_df[action_df['Action'] == 'Short'].shape[0] / (len(df) - env.look_back)
-    in_out_of_market = action_df[action_df['Action'] == 'Neutral'].shape[0] / (len(df) - env.look_back)
+    in_long = action_df[action_df['Action'] == 'Long'].shape[0] / (len(df) - env.look_back - 1)
+    in_short = action_df[action_df['Action'] == 'Short'].shape[0] / (len(df) - env.look_back - 1)
+    in_out_of_market = action_df[action_df['Action'] == 'Neutral'].shape[0] / (len(df) - env.look_back - 1)
 
     # Ensure the agent's networks are reverted back to training mode
     if agent_type == 'PPO':
@@ -170,6 +170,7 @@ def calculate_number_of_trades_and_duration(actions):
     durations = []
     current_duration = 0
 
+    # Iterate through the actions to count the consecutive non-neutral actions
     for action in actions:
         if action != 'Neutral':
             current_duration += 1
@@ -178,10 +179,11 @@ def calculate_number_of_trades_and_duration(actions):
                 durations.append(current_duration)
                 current_duration = 0
 
-    # Append the last duration if the series ended with a trade
+    # Append the last duration if the series ended with a trade still active
     if current_duration > 0:
         durations.append(current_duration)
 
+    # Calculate the average duration, handle cases where durations list might be empty
     avg_duration = np.mean(durations) if durations else 0
 
     return num_trades, avg_duration
