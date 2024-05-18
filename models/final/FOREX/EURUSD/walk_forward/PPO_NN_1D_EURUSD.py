@@ -43,26 +43,17 @@ def reward_calculation(previous_close, current_close, previous_position, current
         normal_return = (current_close - previous_close) / previous_close
     else:
         normal_return = 0
-    '''
-    magnitude_of_reward = abs(normal_return) ** (1 / 2) * 100
-
-    # Apply the sign of normal_return to the magnitude of the reward
-    if normal_return < 0:
-        reward = -magnitude_of_reward * current_position
-    else:
-        reward = magnitude_of_reward * current_position
-    '''
 
     # Calculate the base reward
-    reward = normal_return * current_position * 100
+    reward = normal_return * current_position * 1000
 
     # Penalize the agent for taking the wrong action
     if reward < 0:
-        reward *= 1.1  # penalty for wrong action
+        reward *= 1  # penalty for wrong action
 
     # Calculate the cost of provision if the position has changed, and it's not neutral (0).
     if current_position != previous_position and abs(current_position) == 1:
-        provision_cost = - provision * 100  # penalty for changing position
+        provision_cost = - provision * 1000  # penalty for changing position
     elif current_position == previous_position and abs(current_position) == 1:
         provision_cost = + provision * 0
     else:
