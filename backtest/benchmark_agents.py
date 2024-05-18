@@ -177,9 +177,6 @@ if __name__ == '__main__':
 
     ph_results_prepared = prepare_backtest_results(ph_results, 'PH')
 
-
-
-
     print("Buy and Hold Agent final results:", bah_results_prepared[('BAH', 'Final Balance')][0])
     print("Benchmark Buy and Hold Agent final reward:", bah_results_prepared[('BAH', 'Total Reward')][0])
     print("Sell and Hold Agent final results:", sah_results_prepared[('SAH', 'Final Balance')][0])

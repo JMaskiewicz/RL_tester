@@ -134,12 +134,14 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     action_df = pd.DataFrame(best_action_list, columns=['Action'])
 
     action_df['Action'] = action_df['Action'].map({-1: 'Short', 0: 'Neutral', 1: 'Long'})
-    num_trades, average_trade_duration = calculate_number_of_trades_and_duration(df, action_df['Action'])
+
+    # Pass the 'Action' column Series directly
+    num_trades, average_trade_duration = calculate_number_of_trades_and_duration(action_df['Action'])
 
     # Calculate the number of times the agent was in long, short, or out of the market
-    in_long = action_df[action_df['Action'] == 1].shape[0]
-    in_short = action_df[action_df['Action'] == -1].shape[0]
-    in_out_of_market = action_df[action_df['Action'] == 0].shape[0]
+    in_long = action_df[action_df['Action'] == 'Long'].shape[0]
+    in_short = action_df[action_df['Action'] == 'Short'].shape[0]
+    in_out_of_market = action_df[action_df['Action'] == 'Neutral'].shape[0]
 
     # Ensure the agent's networks are reverted back to training mode
     if agent_type == 'PPO':
@@ -159,9 +161,7 @@ def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision
     return generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic, reward_function)
 
 
-def calculate_number_of_trades_and_duration(df, action_column):
-    actions = df[action_column]
-
+def calculate_number_of_trades_and_duration(actions):
     # Identify trade transitions
     transitions = (actions.shift(1) != actions) & (actions != 'Neutral')
     num_trades = transitions.sum()
@@ -213,7 +213,7 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Calculate Number of Trades and Average Duration
-    num_trades, avg_duration = calculate_number_of_trades_and_duration(df, strategy_column)
+    num_trades, avg_duration = calculate_number_of_trades_and_duration(df[strategy_column])
 
     # Calculate the number of times the agent was in long, short, or out of the market
     in_long = df[df[strategy_column] == 'Long'].shape[0]
