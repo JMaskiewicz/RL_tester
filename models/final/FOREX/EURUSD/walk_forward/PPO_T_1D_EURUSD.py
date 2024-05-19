@@ -497,10 +497,7 @@ if __name__ == '__main__':
     final_test_results = pd.DataFrame()
     final_balance = 10000
 
-    # Example usage
     # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
-
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
         {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
@@ -513,16 +510,30 @@ if __name__ == '__main__':
         {"price_type": "Close", "mkf": "EURJPY"},
         {"price_type": "Close", "mkf": "GBPUSD"},
     ]
-    add_indicators(df, indicators)
-    add_returns(df, return_indicators)
 
-    add_time_sine_cosine(df, '1W')
-    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
-    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
-    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
+    variables = [
+        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
+        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+    ]
 
     look_back = 20
-    df = df.dropna()
+    tradable_markets = 'EURUSD'
+    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    leverage = 1
 
     # tracking
     provision_sum_test_final = 0
@@ -548,37 +559,18 @@ if __name__ == '__main__':
 
         # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
         df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
-                                                                                                          test_date:end_date]
+                                                                                                    test_date:end_date]
+
+        # Add the last look_back rows of the training data to the validation and test datasets to start making decisions
+        # at first observation in the validation and test datasets
         df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
         df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
-        variables = [
-            {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-            {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-            {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-            {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-            {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-            {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
-            {"variable": ("K%", "EURUSD"), "edit": "standardize"},
-            {"variable": ("D%", "EURUSD"), "edit": "standardize"},
-            {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
-            {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
-            {"variable": ("cos_time_1W", ""), "edit": None},
-            {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-            {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-            {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-            {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
-        ]
-
-        tradable_markets = 'EURUSD'
         window_size = '1Y'
         starting_balance = final_balance
-        # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-        provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
         # Environment parameters
-        leverage = 1
-        num_episodes = 5000  # 50
+        num_episodes = 5  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_T_1D_EURUSD(n_actions=3,  # sell, hold money, buy
@@ -597,6 +589,7 @@ if __name__ == '__main__':
                                       static_input_dims=1,  # static input dimensions (current position)
                                       lr_decay_rate=0.995,  # learning rate decay rate
                                       )
+
         total_rewards, episode_durations, total_balances = [], [], []
         episode_probabilities = {'train': [], 'validation': [], 'test': []}
 
@@ -650,6 +643,7 @@ if __name__ == '__main__':
                     agent.learn()
                     agent.memory.clear_memory()
 
+                # Backtesting
                 if generation < agent.generation:
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         futures = []
@@ -665,7 +659,6 @@ if __name__ == '__main__':
                         # Process futures as they complete
                         for future, label in futures:
                             result = future.result()
-                            # Make sure to update these variables to match the exact structure of the data being returned
                             balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, \
                                 sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
                                 average_trade_duration, in_long, in_short, in_out_of_market = result
@@ -713,8 +706,8 @@ if __name__ == '__main__':
 
         buy_and_hold_agent = Buy_and_hold_Agent()
         sell_and_hold_agent = Sell_and_hold_Agent()
-        # TODO
-        # Run backtesting for both agents
+
+        # Run backtesting for both agents benchmarks
         bah_results, _, benchmark_BAH = BF.run_backtesting(
             buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
             BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
@@ -743,14 +736,20 @@ if __name__ == '__main__':
         backtest_results = pd.merge(backtest_results, new_backtest_results, on=[('', 'Label')], how='outer')
         backtest_results = backtest_results.set_index([('', 'Agent Generation')])
 
+        # Find the index of the maximum Sharpe Ratio in the validation set
         label_series = backtest_results[('', 'Label')]
         backtest_results = backtest_results.drop(('', 'Label'), axis=1)
         backtest_results['Label'] = label_series
 
-        sharpe_ratios = backtest_results[(agent.get_name(), 'Sharpe Ratio')]
+        # Filter rows where Label is 'validation'
+        validation_set = backtest_results[
+            backtest_results['Label'] == val_labels[0]]  # name is ending with first test date
+
+        # Extract the Sharpe Ratio column for the validation set
+        sharpe_ratios_validation = validation_set[(agent.get_name(), 'Sharpe Ratio')]
 
         # Find the index of the maximum Sharpe Ratio in the validation set
-        best_sharpe_index = sharpe_ratios.idxmax()
+        best_sharpe_index = sharpe_ratios_validation.idxmax()
 
         # if nan in the sharpe ratios, take the last one
         if pd.isna(best_sharpe_index):
@@ -788,7 +787,7 @@ if __name__ == '__main__':
 
         # save also number of trades and provision sum
         provision_sum_test_final = provision_sum_test_final + \
-                                   best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
+                                    best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
 
         # add year to the dates
         validation_date = (datetime.strptime(validation_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')

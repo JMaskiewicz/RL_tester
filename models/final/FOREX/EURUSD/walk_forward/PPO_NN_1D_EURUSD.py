@@ -642,14 +642,20 @@ if __name__ == '__main__':
         backtest_results = pd.merge(backtest_results, new_backtest_results, on=[('', 'Label')], how='outer')
         backtest_results = backtest_results.set_index([('', 'Agent Generation')])
 
+        # Find the index of the maximum Sharpe Ratio in the validation set
         label_series = backtest_results[('', 'Label')]
         backtest_results = backtest_results.drop(('', 'Label'), axis=1)
         backtest_results['Label'] = label_series
 
-        sharpe_ratios = backtest_results[(agent.get_name(), 'Sharpe Ratio')]
+        # Filter rows where Label is 'validation'
+        validation_set = backtest_results[
+            backtest_results['Label'] == val_labels[0]]  # name is ending with first test date
+
+        # Extract the Sharpe Ratio column for the validation set
+        sharpe_ratios_validation = validation_set[(agent.get_name(), 'Sharpe Ratio')]
 
         # Find the index of the maximum Sharpe Ratio in the validation set
-        best_sharpe_index = sharpe_ratios.idxmax()
+        best_sharpe_index = sharpe_ratios_validation.idxmax()
 
         # if nan in the sharpe ratios, take the last one
         if pd.isna(best_sharpe_index):
