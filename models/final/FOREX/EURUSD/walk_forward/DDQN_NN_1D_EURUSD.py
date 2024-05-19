@@ -433,7 +433,7 @@ if __name__ == '__main__':
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
 
         # Environment parameters
-        num_episodes = 15  # 100
+        num_episodes = 5000  # 100
 
         # Instantiate the agent
         agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
@@ -603,8 +603,7 @@ if __name__ == '__main__':
         backtest_results['Label'] = label_series
 
         # Filter rows where Label is 'validation'
-        validation_set = backtest_results[
-            backtest_results['Label'] == val_labels[0]]
+        validation_set = backtest_results[backtest_results['Label'] == val_labels[0]]
 
         # Extract the Sharpe Ratio column for the validation set
         sharpe_ratios_validation = validation_set[(agent.get_name(), 'Sharpe Ratio')]

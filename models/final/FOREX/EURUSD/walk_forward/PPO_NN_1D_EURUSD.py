@@ -648,8 +648,7 @@ if __name__ == '__main__':
         backtest_results['Label'] = label_series
 
         # Filter rows where Label is 'validation'
-        validation_set = backtest_results[
-            backtest_results['Label'] == val_labels[0]]  # name is ending with first test date
+        validation_set = backtest_results[backtest_results['Label'] == val_labels[0]]
 
         # Extract the Sharpe Ratio column for the validation set
         sharpe_ratios_validation = validation_set[(agent.get_name(), 'Sharpe Ratio')]
