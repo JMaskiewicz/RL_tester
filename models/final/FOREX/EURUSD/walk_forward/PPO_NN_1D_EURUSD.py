@@ -406,10 +406,6 @@ if __name__ == '__main__':
     final_test_results = pd.DataFrame()
     final_balance = 10000
 
-    # Example usage
-    # Stock market variables
-    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
-
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
         {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
@@ -422,15 +418,30 @@ if __name__ == '__main__':
         {"price_type": "Close", "mkf": "EURJPY"},
         {"price_type": "Close", "mkf": "GBPUSD"},
     ]
-    add_indicators(df, indicators)
-    add_returns(df, return_indicators)
 
-    provision_sum_test_final = 0
-
-    add_time_sine_cosine(df, '1W')
+    variables = [
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
+        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
+        # {"variable": ("sin_time_1W", ""), "edit": None},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("Returns_Close", "EURUSD"), "edit": None},
+        {"variable": ("Returns_Close", "USDJPY"), "edit": None},
+        {"variable": ("Returns_Close", "EURJPY"), "edit": None},
+        {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
+    ]
 
     look_back = 20
-    df = df.dropna()
+    tradable_markets = 'EURUSD'
+    # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
+    provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
+    leverage = 1
+
+    # tracking
+    provision_sum_test_final = 0
 
     for move_forward in range(1, 6):
         print("validation_date", validation_date)
@@ -450,30 +461,12 @@ if __name__ == '__main__':
         df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
         df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
-        variables = [
-            {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-            {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-            {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-            {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
-            {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-            {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-            {"variable": ("sin_time_1W", ""), "edit": None},
-            {"variable": ("cos_time_1W", ""), "edit": None},
-            {"variable": ("Returns_Close", "EURUSD"), "edit": None},
-            {"variable": ("Returns_Close", "USDJPY"), "edit": None},
-            {"variable": ("Returns_Close", "EURJPY"), "edit": None},
-            {"variable": ("Returns_Close", "GBPUSD"), "edit": None},
-        ]
-
-        tradable_markets = 'EURUSD'
         window_size = '1Y'
         starting_balance = final_balance
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
-        provision = 0.0001  # 0.001, cant be too high as it would not learn to trade
 
         # Environment parameters
-        leverage = 1
-        num_episodes = 5000  # 50
+        num_episodes = 10  # 100
 
         # Create an instance of the agent
         agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy

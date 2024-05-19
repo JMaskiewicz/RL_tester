@@ -155,7 +155,7 @@ class DDQN_Agent_NN_1D_EURUSD:
     def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001,
                  target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000,
                  batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1,
-                 lr_decay_rate=0.999, premium_gamma=0.5, lambda_=0.75):
+                 lr_decay_rate=0.999, lambda_=0.75):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.n_actions = n_actions
         # self.device = torch.device("cpu")
@@ -173,7 +173,6 @@ class DDQN_Agent_NN_1D_EURUSD:
         self.weight_decay = weight_decay  # Weight decay
         self.l1_lambda = l1_lambda  # L1 regularization lambda
         self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
-        self.premium_gamma = premium_gamma  # Discount factor for the alternative rewards
         self.action_space = [i for i in range(n_actions)]  # Action space
         self.lambda_ = lambda_  # Lambda for TD(lambda) learning
 
@@ -452,7 +451,6 @@ if __name__ == '__main__':
                                         weight_decay=0.000005,  # Weight decay
                                         l1_lambda=0.00000005,  # L1 regularization lambda
                                         lr_decay_rate=0.9925,  # Learning rate decay rate
-                                        premium_gamma=0.75,  # Discount factor for the alternative rewards
                                         lambda_=0.75,  # Lambda for TD(lambda) learning
                                         )
 
