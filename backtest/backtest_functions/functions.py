@@ -8,7 +8,7 @@ import torch
 import math
 from concurrent.futures import ThreadPoolExecutor
 
-from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
+#from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
 def calculate_drawdown_duration(drawdown):
     # Identifying the drawdown periods
@@ -23,7 +23,7 @@ def calculate_drawdown_duration(drawdown):
     max_drawdown_duration = drawdown_durations.max()
     return max_drawdown_duration
 
-@get_time
+#@get_time
 def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, currency_pair, look_back,
                     variables, provision, starting_balance, leverage, Trading_Environment_Class, reward_calculation,
                     workers=4):
@@ -173,13 +173,19 @@ def calculate_number_of_trades_and_duration(actions):
 
     # Iterate through the actions to count the consecutive non-neutral actions
     for action in actions:
-        if action != 'Neutral' and action == current_action:
-            current_duration += 1
+        if action != 'Neutral':
+            if action == current_action:
+                current_duration += 1
+            else:
+                if current_duration > 0:
+                    durations.append(current_duration)
+                current_action = action
+                current_duration = 1
         else:
             if current_duration > 0:
                 durations.append(current_duration)
                 current_duration = 0
-            current_action = action
+                current_action = 'Neutral'
 
     # Append the last duration if the series ended with a trade still active
     if current_duration > 0:
@@ -240,3 +246,26 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
         'In out of the market': out_of_market / len(df),
     }
     return metrics
+
+if __name__ == '__main__':
+    # test average trade duration
+    actions = pd.Series(['Long', 'Short'] * 5)
+
+    num_trades, avg_duration = calculate_number_of_trades_and_duration(actions)
+
+    print("Number of Trades:", num_trades)
+    print("Average trade duration:", avg_duration)
+
+    actions = pd.Series(['Long', 'Short', 'Neutral'] * 5)
+
+    num_trades, avg_duration = calculate_number_of_trades_and_duration(actions)
+
+    print("Number of Trades:", num_trades)
+    print("Average trade duration:", avg_duration)
+
+    actions = pd.Series(['Long', 'Long', 'Short', 'Neutral'] * 5)
+
+    num_trades, avg_duration = calculate_number_of_trades_and_duration(actions)
+
+    print("Number of Trades:", num_trades)
+    print("Average trade duration:", avg_duration)
