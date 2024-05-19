@@ -169,15 +169,17 @@ def calculate_number_of_trades_and_duration(actions):
     # Calculate durations
     durations = []
     current_duration = 0
+    current_action = 'Neutral'
 
     # Iterate through the actions to count the consecutive non-neutral actions
     for action in actions:
-        if action != 'Neutral':
+        if action != 'Neutral' and action == current_action:
             current_duration += 1
         else:
             if current_duration > 0:
                 durations.append(current_duration)
                 current_duration = 0
+            current_action = action
 
     # Append the last duration if the series ended with a trade still active
     if current_duration > 0:
@@ -224,6 +226,8 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
 
     # Compile metrics
     metrics = {
+        'Final Balance': df[balance_column].iloc[-1],
+        'Provision Sum': provision_sum,
         'Sharpe Ratio': sharpe_ratio,
         'Sortino Ratio': sortino_ratio,
         'Max Drawdown': max_drawdown,
@@ -231,7 +235,6 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
         'Calmar Ratio': calmar_ratio,
         'Number of Trades': num_trades,
         'Average trade duration': avg_duration,
-        'Provision Sum': provision_sum,
         'In long': in_long / len(df),
         'In short': in_short / len(df),
         'In out of the market': out_of_market / len(df),

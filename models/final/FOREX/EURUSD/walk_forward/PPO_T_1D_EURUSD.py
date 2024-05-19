@@ -843,6 +843,12 @@ if __name__ == '__main__':
                              'sell and hold sharpe ratio': sah_results_prepared[('SAH', 'Sharpe Ratio')][0],
                              'buy and hold sharpe ratio': bah_results_prepared[('BAH', 'Sharpe Ratio')][0]})
 
+    statistic_report = pd.DataFrame([statistic_report])
+    statistic_report.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\statistic_report_{agent.get_name()}.csv', index=False)
+
+    # Save final_test_results to a CSV file
+    final_test_results.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\final_test_results_{agent.get_name()}.csv', index=False)
+
     print(f"Final Balance: {final_balance:.2f}")
     # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
     # 12100 good one

@@ -21,9 +21,11 @@ class Sell_and_hold_Agent:
         return action_probs
 
 class Yearly_Perfect_Agent:
-    def __init__(self, df, action_size=3):
+    def __init__(self, df, look_back, tradable_markets, action_size=3):
         self.df = df
+        self.look_back = look_back
         self.action_size = action_size
+        self.tradable_markets = tradable_markets
         self.generation = 'Yearly Perfect Agent'
         self.trends = self.analyze_market_trends()
         self.precomputed_actions = self.precompute_actions()
@@ -33,11 +35,11 @@ class Yearly_Perfect_Agent:
         trends = {}
         for year in self.df.index.year.unique():
             year_data = self.df.loc[self.df.index.year == year]
-            initial_price = year_data[('Close', 'EURUSD')].iloc[0]
-            final_price = year_data[('Close', 'EURUSD')].iloc[-1]
+            initial_price = year_data[('Close', self.tradable_markets)].iloc[0]
+            final_price = year_data[('Close', self.tradable_markets)].iloc[-1]
             market_return = final_price / initial_price - 1
             trends[year] = 1 if market_return > 0 else -1
-        return trends
+        return trends  # dict(list(trends.items())[self.look_back:])  # TODO CORRECT THIS
 
     def precompute_actions(self):
         actions = []
@@ -56,6 +58,7 @@ class Yearly_Perfect_Agent:
         action_probs[precomputed_action] = 1.0
         self.current_step += 1
         return action_probs
+
 
 # tests
 if __name__ == '__main__':
@@ -120,15 +123,15 @@ if __name__ == '__main__':
     np.random.seed(0)
     random.seed(0)
 
-    tradable_markets = 'EURUSD'
+    tradable_markets = 'USDJPY'
     starting_balance = 10000
-    look_back = 20
+    look_back = 1
     provision = 0.0001
     leverage = 1
 
     # final results for the agent
     # Example usage
-    df = load_data_parallel(['EURUSD'], '1D')
+    df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
     df = df.dropna()
 
@@ -137,12 +140,12 @@ if __name__ == '__main__':
     test_date = '2019-01-01'
 
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
-                                                                                                      test_date:'2025-01-01']
-    df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
-    df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
+                                                                                   test_date:'2025-01-01']
+    #df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
+    #df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
     variables = [
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
     ]
 
     buy_and_hold_agent = Buy_and_hold_Agent()
@@ -167,7 +170,7 @@ if __name__ == '__main__':
     bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
                                                      axis=1)  # drop the agent generation column
 
-    perfect_agent = Yearly_Perfect_Agent(df_test, action_size=3)  # PH - perfect hold
+    perfect_agent = Yearly_Perfect_Agent(df_test, look_back, tradable_markets, action_size=3)  # PH - perfect hold
 
     # Run backtesting for both agents
     ph_results, _, benchmark_ph = BF.run_backtesting(
@@ -184,8 +187,8 @@ if __name__ == '__main__':
     print("Perfect Hold Agent final results:", ph_results_prepared[('PH', 'Final Balance')][0])
     print("Benchmark Perfect Hold Agent final reward:", ph_results_prepared[('PH', 'Total Reward')][0])
 
-    first_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[look_back]
-    last_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[-1]
+    first_close = df_test.loc[:, ('Close', 'USDJPY')].iloc[look_back]
+    last_close = df_test.loc[:, ('Close', 'USDJPY')].iloc[-1]
     return_percentage = ((last_close - first_close) / first_close) * 100
 
     # Calculate the final investment value
