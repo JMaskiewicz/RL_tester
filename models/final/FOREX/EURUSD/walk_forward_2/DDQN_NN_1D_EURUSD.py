@@ -27,7 +27,7 @@ from dateutil.relativedelta import relativedelta
 from data.function.load_data import load_data_parallel
 from data.function.rolling_window import rolling_window_datasets
 from technical_analysys.add_indicators import add_indicators, add_returns, add_log_returns, add_time_sine_cosine
-from functions.utilis import save_model
+from functions.utilis import save_model, set_seeds
 import backtest.backtest_functions.functions as BF
 from functions.utilis import prepare_backtest_results, generate_index_labels, get_time
 
@@ -359,9 +359,7 @@ if __name__ == '__main__':
     # time the execution
     start_time_X = time.time()
     # Set seeds for reproducibility
-    torch.manual_seed(0)
-    np.random.seed(0)
-    random.seed(0)
+    set_seeds(0)
 
     start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2017-12-31'
@@ -392,8 +390,8 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        # {"variable": ("sin_time_1W", ""), "edit": None},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -432,24 +430,24 @@ if __name__ == '__main__':
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
 
         # Environment parameters
-        num_episodes = 4000  # 100
+        num_episodes = 2500  # 100
 
         # Instantiate the agent
         agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
                                         n_actions=3,  # buy, sell, hold
                                         n_epochs=1,  # number of epochs 10
                                         mini_batch_size=128,  # mini batch size 128
-                                        policy_alpha=0.0025,  # learning rate for the policy network  0.0005
-                                        target_alpha=0.00025,  # learning rate for the target network
+                                        policy_alpha=0.0005,  # learning rate for the policy network  0.0005
+                                        target_alpha=0.00005,  # learning rate for the target network
                                         gamma=0.75,  # discount factor 0.99
                                         epsilon=1.0,  # initial epsilon 1.0
-                                        epsilon_dec=0.9925,  # epsilon decay rate 0.99
+                                        epsilon_dec=0.991,  # epsilon decay rate 0.99
                                         epsilon_end=0,  # minimum epsilon  0
                                         mem_size=1000000,  # memory size 100000
                                         batch_size=1024,  # batch size  1024
-                                        replace=10,  # replace target network count 10
-                                        weight_decay=0.00001,  # Weight decay
-                                        l1_lambda=0.0000001,  # L1 regularization lambda
+                                        replace=20,  # replace target network count 10
+                                        weight_decay=0.000005,  # Weight decay
+                                        l1_lambda=0.00000005,  # L1 regularization lambda
                                         lr_decay_rate=0.995,  # Learning rate decay rate
                                         lambda_=0.75,  # Lambda for TD(lambda) learning
                                         )
@@ -606,8 +604,32 @@ if __name__ == '__main__':
         # Extract the Sharpe Ratio column for the validation set
         sharpe_ratios_validation = validation_set[(agent.get_name(), 'Sharpe Ratio')]
 
-        # Find the index of the maximum Sharpe Ratio in the validation set
-        best_sharpe_index = sharpe_ratios_validation.idxmax()
+        num_previous_generations = 3
+        num_following_generations = num_previous_generations
+
+        # Calculate the moving average of Sharpe Ratios for each generation
+        moving_avg_sharpe_ratios = []
+        for i in range(len(backtest_results)):
+            # Calculate the start and end indices for the window of generations to consider
+            start_index = max(0, i - num_previous_generations)
+            end_index = min(len(backtest_results), i + num_following_generations + 1)
+
+            # Extract Sharpe Ratios for the window of generations
+            window_sharpe_ratios = backtest_results.iloc[start_index:end_index][(agent.get_name(), 'Sharpe Ratio')]
+
+            # Calculate the average Sharpe Ratio for the window of generations
+            avg_sharpe_ratio = window_sharpe_ratios.mean()
+
+            moving_avg_sharpe_ratios.append(avg_sharpe_ratio)
+
+        # Find the index of the generation with the highest average Sharpe Ratio
+        best_avg_sharpe_index = moving_avg_sharpe_ratios.index(max(moving_avg_sharpe_ratios))
+
+        print(f"Best average Sharpe Ratio index: {best_avg_sharpe_index}")
+        print(f"Best average Sharpe Ratio: {max(moving_avg_sharpe_ratios)}")
+
+        # Use the index to get the best Sharpe Ratio index
+        best_sharpe_index = backtest_results.index[best_avg_sharpe_index]
 
         # if nan in the sharpe ratios, take the last one
         if pd.isna(best_sharpe_index):

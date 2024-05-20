@@ -123,8 +123,8 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     max_drawdown = drawdown.min()
     max_drawdown_duration = calculate_drawdown_duration(drawdown)
 
-    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df)-env.look_back)
-    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+    negative_volatility = returns[returns < 0].std()
+    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(len(df)-env.look_back) if negative_volatility > 1e-6 else float('nan')
 
     annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')

@@ -11,16 +11,17 @@ DDQN 5.1
 import numpy as np
 import pandas as pd
 import time
-import torch
-import torch.nn as nn
-import torch.optim as optim
 from tqdm import tqdm
 import random
 from itertools import cycle
 from concurrent.futures import ThreadPoolExecutor
 import torch.nn.functional as F
 from numba import jit
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.optim.lr_scheduler import ExponentialLR
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -46,7 +47,6 @@ random.seed(0)
 Reward Calculation function is the most crucial part of the RL algorithm. It is the function that determines the reward the agent receives for its actions.
 currently there is 
 """
-
 
 @jit(nopython=True)
 def reward_calculation(previous_close, current_close, previous_position, current_position, leverage, provision):
@@ -79,51 +79,77 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     return final_reward
 
+class TransformerDuelingQNetwork(nn.Module):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1/4, static_input_dims=1):
+        super(TransformerDuelingQNetwork, self).__init__()
+        self.input_dims = input_dims
+        self.static_input_dims = static_input_dims
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.dropout_rate = dropout_rate
 
-class DuelingQNetwork(nn.Module):
-    def __init__(self, input_dims, n_actions, dropout_rate=1 / 4):
-        super(DuelingQNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dims, 1024)
-        self.dropout1 = nn.Dropout(dropout_rate)
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
+
+        self.max_position_embeddings = 128
+        self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
+        self.fc_static = nn.Linear(static_input_dims, input_dims)
+
+        self.fc1 = nn.Linear(input_dims * 2, 1024)
+        self.ln1 = nn.LayerNorm(1024)
         self.fc2 = nn.Linear(1024, 512)
-        self.dropout2 = nn.Dropout(dropout_rate)
-        self.fc_value = nn.Linear(512, 512)
-        self.value = nn.Linear(512, 1)
-        self.fc_advantage = nn.Linear(512, 256)
-        self.advantage = nn.Linear(256, n_actions)
+        self.ln2 = nn.LayerNorm(512)
+        self.fc_value = nn.Linear(512, 1)
+        self.fc_advantage = nn.Linear(512, n_actions)
 
-    def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = self.dropout1(x)
-        x = F.relu(self.fc2(x))
-        x = self.dropout2(x)
+    def forward(self, dynamic_state, static_state):
+        if len(dynamic_state.shape) == 2:
+            dynamic_state = dynamic_state.unsqueeze(1)  # Adding sequence dimension if it's missing
 
-        val = F.relu(self.fc_value(x))
-        val = self.value(val)
+        batch_size, seq_length, _ = dynamic_state.size()
+        positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
 
-        adv = F.relu(self.fc_advantage(x))
-        adv = self.advantage(adv)
+        dynamic_state = dynamic_state + positional_encoding
+        transformer_out = self.transformer_encoder(dynamic_state)
 
-        # Combine value and advantage streams
+        static_state_encoded = self.fc_static(static_state.unsqueeze(1))
+        combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
+
+        x = torch.relu(self.fc1(combined_features))
+        x = torch.relu(self.fc2(x))
+
+        val = self.fc_value(x)
+        adv = self.fc_advantage(x)
+
         q_values = val + (adv - adv.mean(dim=1, keepdim=True))
 
         return q_values
 
 
 class DQNMemory:
-    def __init__(self, max_size, input_shape, n_actions):
+    def __init__(self, max_size, dynamic_input_shape, static_input_shape, n_actions):
         self.mem_size = max_size
         self.mem_cntr = 0
-        self.state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
-        self.new_state_memory = np.zeros((self.mem_size, *input_shape), dtype=np.float32)
+
+        # Memory arrays for dynamic (time-series) state components
+        self.dynamic_state_memory = np.zeros((self.mem_size, *dynamic_input_shape), dtype=np.float32)
+        self.dynamic_new_state_memory = np.zeros((self.mem_size, *dynamic_input_shape), dtype=np.float32)
+
+        # Memory array for static state components
+        self.static_state_memory = np.zeros((self.mem_size, *static_input_shape), dtype=np.float32)
+        self.static_new_state_memory = np.zeros((self.mem_size, *static_input_shape), dtype=np.float32)
+
+        # Memory for other components
         self.action_memory = np.zeros(self.mem_size, dtype=np.int64)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
 
-    def store_transition(self, state, action, reward, state_, done):
+    def store_transition(self, dynamic_state, static_state, action, reward, dynamic_state_, static_state_, done):
         index = self.mem_cntr % self.mem_size
-        self.state_memory[index] = state
-        self.new_state_memory[index] = state_
+        self.dynamic_state_memory[index] = dynamic_state
+        self.dynamic_new_state_memory[index] = dynamic_state_
+        self.static_state_memory[index] = static_state
+        self.static_new_state_memory[index] = static_state_
         self.action_memory[index] = action
         self.reward_memory[index] = reward
         self.terminal_memory[index] = done
@@ -134,71 +160,75 @@ class DQNMemory:
         max_mem = min(self.mem_cntr, self.mem_size)
         batch = np.random.choice(max_mem, batch_size, replace=False)
 
-        states = self.state_memory[batch]
+        dynamic_states = self.dynamic_state_memory[batch]
+        dynamic_states_ = self.dynamic_new_state_memory[batch]
+        static_states = self.static_state_memory[batch]
+        static_states_ = self.static_new_state_memory[batch]
         actions = self.action_memory[batch]
         rewards = self.reward_memory[batch]
-        states_ = self.new_state_memory[batch]
         dones = self.terminal_memory[batch]
 
-        return states, actions, rewards, states_, dones
+        return dynamic_states, static_states, actions, rewards, dynamic_states_, static_states_, dones
 
     def clear_memory(self):
         self.mem_cntr = 0
-        self.state_memory = np.zeros_like(self.state_memory)
-        self.new_state_memory = np.zeros_like(self.new_state_memory)
+        self.dynamic_state_memory = np.zeros_like(self.dynamic_state_memory)
+        self.dynamic_new_state_memory = np.zeros_like(self.dynamic_new_state_memory)
+        self.static_state_memory = np.zeros_like(self.static_state_memory)
+        self.static_new_state_memory = np.zeros_like(self.static_new_state_memory)
         self.action_memory = np.zeros_like(self.action_memory)
         self.reward_memory = np.zeros_like(self.reward_memory)
         self.terminal_memory = np.zeros_like(self.terminal_memory)
 
 
-class DDQN_Agent_NN_1D_EURUSD:
+class DDQN_Agent_T_1D_EURUSD:
     def __init__(self, input_dims, n_actions, n_epochs=1, mini_batch_size=256, gamma=0.99, policy_alpha=0.001,
                  target_alpha=0.0005, epsilon=1.0, epsilon_dec=1e-5, epsilon_end=0.01, mem_size=100000,
                  batch_size=64, replace=1000, weight_decay=0.0005, l1_lambda=1e-5, static_input_dims=1,
                  lr_decay_rate=0.999, lambda_=0.75):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.n_actions = n_actions
-        # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
-        self.n_epochs = n_epochs  # Number of epochs
-        self.mini_batch_size = mini_batch_size  # Mini-batch size
-        self.gamma = gamma  # Discount factor
-        self.epsilon = epsilon  # Exploration rate
-        self.epsilon_dec = epsilon_dec  # Exploration rate decay
-        self.epsilon_min = epsilon_end  # Minimum exploration rate
-        self.mem_size = mem_size  # Memory size
-        self.batch_size = batch_size  # Batch size
-        self.replace_target_cnt = replace  # Replace target network count
-        self.learn_step_counter = 0  # Learn step counter
-        self.weight_decay = weight_decay  # Weight decay
-        self.l1_lambda = l1_lambda  # L1 regularization lambda
-        self.lr_decay_rate = lr_decay_rate  # Learning rate decay rate
-        self.action_space = [i for i in range(n_actions)]  # Action space
-        self.lambda_ = lambda_  # Lambda for TD(lambda) learning
+        self.n_epochs = n_epochs
+        self.mini_batch_size = mini_batch_size
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.epsilon_dec = epsilon_dec
+        self.epsilon_min = epsilon_end
+        self.mem_size = mem_size
+        self.batch_size = batch_size
+        self.replace_target_cnt = replace
+        self.learn_step_counter = 0
+        self.weight_decay = weight_decay
+        self.l1_lambda = l1_lambda
+        self.lr_decay_rate = lr_decay_rate
+        self.action_space = [i for i in range(n_actions)]
+        self.lambda_ = lambda_
 
-        # Memory
-        self.memory = DQNMemory(mem_size, (input_dims,), n_actions)
+        dynamic_input_shape = (input_dims,)
+        static_input_shape = (static_input_dims,)
 
-        # Policy and target networks
-        self.q_policy = DuelingQNetwork(input_dims, n_actions).to(self.device)
-        self.q_target = DuelingQNetwork(input_dims, n_actions).to(self.device)
+        # Initialize memory with dynamic and static input shapes
+        self.memory = DQNMemory(mem_size, dynamic_input_shape, static_input_shape, n_actions)
+
+        # Initialize networks
+        self.q_policy = TransformerDuelingQNetwork(n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=0.25, static_input_dims=static_input_dims).to(self.device)
+        self.q_target = TransformerDuelingQNetwork(n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=0.25, static_input_dims=static_input_dims).to(self.device)
         self.q_target.load_state_dict(self.q_policy.state_dict())
-        self.q_target.eval()  # Set the target network to evaluation mode
+        self.q_target.eval()
 
-        self.policy_lr = policy_alpha  # Policy learning rate
-        self.target_lr = target_alpha  # Target learning rate
+        self.policy_lr = policy_alpha
+        self.target_lr = target_alpha
         self.policy_optimizer = optim.Adam(self.q_policy.parameters(), lr=self.policy_lr, weight_decay=weight_decay)
         self.target_optimizer = optim.Adam(self.q_target.parameters(), lr=self.target_lr, weight_decay=weight_decay)
 
-        # track the generation of the agent
-        self.generation = 0
-
-        # Learning rate schedulers
         self.policy_scheduler = ExponentialLR(self.policy_optimizer, gamma=self.lr_decay_rate)
         self.target_scheduler = ExponentialLR(self.target_optimizer, gamma=self.lr_decay_rate)
 
-    def store_transition(self, state, action, reward, state_, done):
-        self.memory.store_transition(state, action, reward, state_, done)
+        self.generation = 0
+
+    def store_transition(self, dynamic_state, static_state, action, reward, dynamic_state_, static_state_, done):
+        self.memory.store_transition(dynamic_state, static_state, action, reward, dynamic_state_, static_state_, done)
 
     def replace_target_network(self):
         if self.learn_step_counter % self.replace_target_cnt == 0:
@@ -216,7 +246,7 @@ class DDQN_Agent_NN_1D_EURUSD:
         # Set the policy network to training mode
         self.q_policy.train()
 
-        states, actions, rewards, states_, dones = self.memory.sample_buffer(self.batch_size)
+        dynamic_states, static_states, actions, rewards, dynamic_states_, static_states_, dones = self.memory.sample_buffer(self.batch_size)
 
         # Initialize eligibility traces
         eligibility_traces = torch.zeros((self.batch_size, self.n_actions)).to(self.device)
@@ -231,15 +261,20 @@ class DDQN_Agent_NN_1D_EURUSD:
                 end = min((mini_batch + 1) * self.mini_batch_size, self.batch_size)
 
                 # Convert the mini-batch to tensors
-                mini_states = torch.tensor(states[start:end], dtype=torch.float).to(self.device)
+                mini_dynamic_states = torch.tensor(dynamic_states[start:end], dtype=torch.float).unsqueeze(1).to(self.device)
+                mini_static_states = torch.tensor(static_states[start:end], dtype=torch.float).to(self.device)
+                mini_dynamic_states_ = torch.tensor(dynamic_states_[start:end], dtype=torch.float).unsqueeze(1).to(self.device)
+                mini_static_states_ = torch.tensor(static_states_[start:end], dtype=torch.float).to(self.device)
                 mini_actions = torch.tensor(actions[start:end]).to(self.device)
                 mini_rewards = torch.tensor(rewards[start:end], dtype=torch.float).to(self.device)
-                mini_states_ = torch.tensor(states_[start:end], dtype=torch.float).to(self.device)
                 mini_dones = torch.tensor(dones[start:end], dtype=torch.bool).to(self.device)
 
-                q_pred = self.q_policy(mini_states).gather(1, mini_actions.unsqueeze(-1)).squeeze(-1)
-                q_next = self.q_target(mini_states_).detach()
-                q_eval = self.q_policy(mini_states_).detach()
+                q_pred = self.q_policy(mini_dynamic_states, mini_static_states).gather(1, mini_actions.unsqueeze(
+                    -1)).squeeze(-1)
+
+                # Predict Q-values for the next mini-batch states using target network
+                q_next = self.q_target(mini_dynamic_states_, mini_static_states_).detach()
+                q_eval = self.q_policy(mini_dynamic_states_, mini_static_states_).detach()
 
                 max_actions = torch.argmax(q_eval, dim=1)
                 q_next[mini_dones] = 0.0
@@ -282,23 +317,21 @@ class DDQN_Agent_NN_1D_EURUSD:
         print("-" * 100)
 
     @torch.no_grad()
-    def choose_action(self, observation, current_position):
+    def choose_action(self, dynamic_state, static_state):
         # Epsilon-greedy action selection
         if np.random.random() > self.epsilon:
-            # Convert the observation to a numpy array if it's not already
-            if not isinstance(observation, np.ndarray):
-                observation = np.array(observation)
+            # Ensure both parts of the state are correctly formatted as tensors
+            dynamic_state = torch.tensor(dynamic_state, dtype=torch.float).unsqueeze(0).to(
+                self.device)  # Add batch dimension
+            static_state = torch.tensor([static_state], dtype=torch.float).unsqueeze(0).to(
+                self.device)  # Add batch dimension and wrap in list if it's a single value
 
-            # Reshape the observation to (1, -1) which means 1 row and as many columns as necessary
-            observation = observation.reshape(1, -1)
+            # Get Q-values from the policy network
+            q_values = self.q_policy(dynamic_state, static_state)
+            action = torch.argmax(q_values).item()  # Choose the action with the highest Q-value
 
-            # Convert the numpy array to a tensor
-            state = torch.tensor(observation, dtype=torch.float).to(self.device)
-
-            actions = self.q_policy(state)
-            action = torch.argmax(actions).item()
-        # if the random number is less than epsilon, take a random action
         else:
+            # If the random number is less than epsilon, take a random action
             action = np.random.choice(self.action_space)
 
         return action
@@ -311,10 +344,13 @@ class DDQN_Agent_NN_1D_EURUSD:
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        dynamic_state = observation.reshape(1, -1)
+        static_state = np.array([current_position]).reshape(1, -1)
 
-        q_values = self.q_policy(state)
+        dynamic_state_tensor = torch.tensor(dynamic_state, dtype=torch.float).to(self.device)
+        static_state_tensor = torch.tensor(static_state, dtype=torch.float).to(self.device)
+
+        q_values = self.q_policy(dynamic_state_tensor, static_state_tensor)
 
         return q_values.cpu().numpy()
 
@@ -338,12 +374,19 @@ class DDQN_Agent_NN_1D_EURUSD:
         """
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
-        observation = np.append(observation, current_position)
 
-        observation = observation.reshape(1, -1)
-        state = torch.tensor(observation, dtype=torch.float).to(self.device)
+        # Separate handling of dynamic and static states
+        dynamic_state = observation.reshape(1, -1)
+        static_state = np.array([current_position]).reshape(1, -1)  # Static state, reshaped for batch processing
 
-        q_values = self.q_policy(state)
+        # Convert numpy arrays to tensors and ensure they are on the correct device
+        dynamic_state_tensor = torch.tensor(dynamic_state, dtype=torch.float).to(self.device)
+        static_state_tensor = torch.tensor(static_state, dtype=torch.float).to(self.device)
+
+        # Pass both state components to the network
+        q_values = self.q_policy(dynamic_state_tensor, static_state_tensor)
+
+        # Compute the softmax to get action probabilities
         probabilities = F.softmax(q_values, dim=1).cpu().numpy()
 
         return probabilities.flatten()
@@ -392,8 +435,8 @@ if __name__ == '__main__':
         {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
         {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        {"variable": ("sin_time_1W", ""), "edit": None},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        # {"variable": ("sin_time_1W", ""), "edit": None},
+        # {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -432,27 +475,27 @@ if __name__ == '__main__':
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
 
         # Environment parameters
-        num_episodes = 4000  # 100
+        num_episodes = 5000  # 100
 
         # Instantiate the agent
-        agent = DDQN_Agent_NN_1D_EURUSD(input_dims=len(variables) * look_back + 1,  # input dimensions
-                                        n_actions=3,  # buy, sell, hold
-                                        n_epochs=1,  # number of epochs 10
-                                        mini_batch_size=128,  # mini batch size 128
-                                        policy_alpha=0.0025,  # learning rate for the policy network  0.0005
-                                        target_alpha=0.00025,  # learning rate for the target network
-                                        gamma=0.75,  # discount factor 0.99
-                                        epsilon=1.0,  # initial epsilon 1.0
-                                        epsilon_dec=0.9925,  # epsilon decay rate 0.99
-                                        epsilon_end=0,  # minimum epsilon  0
-                                        mem_size=1000000,  # memory size 100000
-                                        batch_size=1024,  # batch size  1024
-                                        replace=10,  # replace target network count 10
-                                        weight_decay=0.00001,  # Weight decay
-                                        l1_lambda=0.0000001,  # L1 regularization lambda
-                                        lr_decay_rate=0.995,  # Learning rate decay rate
-                                        lambda_=0.75,  # Lambda for TD(lambda) learning
-                                        )
+        agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
+                                       n_actions=3,  # buy, sell, hold
+                                       n_epochs=1,  # number of epochs 10
+                                       mini_batch_size=64,  # mini batch size 128
+                                       policy_alpha=0.0005,  # learning rate for the policy network  0.0005
+                                       target_alpha=0.00005,  # learning rate for the target network
+                                       gamma=0.75,  # discount factor 0.99
+                                       epsilon=1.0,  # initial epsilon 1.0
+                                       epsilon_dec=0.998,  # epsilon decay rate 0.99
+                                       epsilon_end=0,  # minimum epsilon  0
+                                       mem_size=1000000,   # memory size 100000
+                                       batch_size=1024,  # batch size  1024
+                                       replace=10,  # replace target network count 10
+                                       weight_decay=0.000005,  # Weight decay
+                                       l1_lambda=0.00000005,  # L1 regularization lambda
+                                       lr_decay_rate=0.995,   # Learning rate decay rate
+                                       lambda_=0.5,  # Lambda for TD(lambda) learning
+                                       )
 
         total_rewards, episode_durations, total_balances = [], [], []
         episode_probabilities = {'train': [], 'validation': [], 'test': []}
@@ -478,6 +521,7 @@ if __name__ == '__main__':
         generation = 0
 
         for episode in tqdm(range(num_episodes)):
+            start_time = time.time()
             window_df = next(dataset_iterator)
             dataset_index = episode % len(rolling_datasets)
 
@@ -489,20 +533,19 @@ if __name__ == '__main__':
                                             initial_balance=starting_balance, leverage=leverage,
                                             reward_function=reward_calculation)
 
-            observation = env.reset()
+            dynamic_state = env.reset()
             done = False
-            start_time = time.time()
             initial_balance = env.balance
-            observation = np.append(observation, 0)
 
             while not done:
-                action = agent.choose_action(observation, env.current_position)
-                observation_, reward, done, info = env.step(action)
-                observation_ = np.append(observation_, env.current_position)
-                agent.store_transition(observation, action, reward, observation_, done)
-                observation = observation_
+                action = agent.choose_action(dynamic_state, env.current_position)
+                dynamic_state_, reward, done, info = env.step(action)
 
-                # Check if enough data is collected or if the dataset ends
+                agent.store_transition(dynamic_state, env.current_position, action, reward, dynamic_state_,
+                                       env.current_position, done)
+                dynamic_state = dynamic_state_
+
+                # Learning process
                 if agent.memory.mem_cntr >= agent.batch_size:
                     agent.learn()
                     agent.memory.clear_memory()
@@ -554,14 +597,15 @@ if __name__ == '__main__':
                         generation = agent.generation
                         print(f"Backtesting completed for {agent.get_name()} generation {generation}")
 
-            # results
+                # results
             end_time = time.time()
             episode_time = end_time - start_time
             total_rewards.append(env.reward_sum)
             episode_durations.append(episode_time)
             total_balances.append(env.balance)
 
-            print(f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
+            print(
+                f"Completed learning fro selected window in episode {episode + 1}: Total Reward: {env.reward_sum}, Total Balance: {env.balance:.2f}, Duration: {episode_time:.2f} seconds, Agent Epsilon: {agent.get_epsilon():.4f}")
 
         buy_and_hold_agent = Buy_and_hold_Agent()
         sell_and_hold_agent = Sell_and_hold_Agent()
@@ -585,8 +629,8 @@ if __name__ == '__main__':
         bah_results_prepared = bah_results_prepared.drop(('', 'Agent Generation'),
                                                          axis=1)  # drop the agent generation column
 
-        print('buy and hold final balance', bah_results_prepared[('BAH',    'Final Balance')][1])
-        print('sell and hold final balance', sah_results_prepared[('SAH',    'Final Balance')][1])
+        print('buy and hold final balance', bah_results_prepared[('BAH', 'Final Balance')][1])
+        print('sell and hold final balance', sah_results_prepared[('SAH', 'Final Balance')][1])
 
         # Merge BAH and SAH results on 'Label'
         new_backtest_results = pd.merge(bah_results_prepared, sah_results_prepared, on=[('', 'Label')], how='outer')
@@ -644,14 +688,15 @@ if __name__ == '__main__':
         print(f"Final Balance: {final_balance:.2f}")
 
         # save also number of trades and provision sum
-        provision_sum_test_final = provision_sum_test_final + best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
+        provision_sum_test_final = provision_sum_test_final + \
+                                   best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
 
         # add year to the dates
         validation_date = (datetime.strptime(validation_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
         test_date = (datetime.strptime(test_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
         end_date = (datetime.strptime(end_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
 
-    # final results for the agent
+        # final results for the agent
 
     df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
@@ -661,19 +706,19 @@ if __name__ == '__main__':
     add_time_sine_cosine(df, '1W')
 
     df = df.dropna()
-    df_2 = df[test_date_2:end_date]
+    df = df[test_date_2:end_date]
 
     buy_and_hold_agent = Buy_and_hold_Agent()
     sell_and_hold_agent = Sell_and_hold_Agent()
 
     # Run backtesting for both agents
     bah_results, _, benchmark_BAH = BF.run_backtesting(
-        buy_and_hold_agent, 'BAH', [df_2], ['final_test'],
+        buy_and_hold_agent, 'BAH', [df], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, 10000, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
     sah_results, _, benchmark_SAH = BF.run_backtesting(
-        sell_and_hold_agent, 'SAH', [df_2], ['final_test'],
+        sell_and_hold_agent, 'SAH', [df], ['final_test'],
         BF.backtest_wrapper, tradable_markets, look_back, variables, provision, 10000, leverage,
         Trading_Environment_Basic, reward_calculation, workers=4)
 
@@ -686,21 +731,23 @@ if __name__ == '__main__':
                                                      axis=1)  # drop the agent generation column
 
     # Generate statistics for the final test results
-    statistic_report = BF.generate_result_statistics(final_test_results, f'{agent.get_name()}_Action', f'{agent.get_name()}_Balances', provision_sum_test_final, look_back=look_back)
-    statistic_report.update({'sell and hold final balance': sah_results_prepared[('SAH',    'Final Balance')][0],
-                             'buy and hold final balance':  bah_results_prepared[('BAH',    'Final Balance')][0],
-                             'sell and hold sharpe ratio':  sah_results_prepared[('SAH',    'Sharpe Ratio')][0],
-                             'buy and hold sharpe ratio':   bah_results_prepared[('BAH',    'Sharpe Ratio')][0]})
+    statistic_report = BF.generate_result_statistics(final_test_results, f'{agent.get_name()}_Action',
+                                                     f'{agent.get_name()}_Balances', provision_sum_test_final,
+                                                     look_back=look_back)
+
+    statistic_report.update({'sell and hold final balance': sah_results_prepared[('SAH', 'Final Balance')][0],
+                             'buy and hold final balance': bah_results_prepared[('BAH', 'Final Balance')][0],
+                             'sell and hold sharpe ratio': sah_results_prepared[('SAH', 'Sharpe Ratio')][0],
+                             'buy and hold sharpe ratio': bah_results_prepared[('BAH', 'Sharpe Ratio')][0]})
 
     print(f"Final Balance: {final_balance:.2f}")
-    # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
-    # 12100 good one
-
     statistic_report = pd.DataFrame([statistic_report])
     #statistic_report.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\statistic_report_{agent.get_name()}.csv', index=False)
 
     # Save final_test_results to a CSV file
     #final_test_results.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\final_test_results_{agent.get_name()}.csv', index=False)
 
+    # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
+    # 12100 good one
     print(statistic_report)
     print('end')

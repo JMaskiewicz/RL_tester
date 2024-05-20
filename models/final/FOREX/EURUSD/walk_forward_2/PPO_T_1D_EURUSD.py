@@ -1,6 +1,23 @@
 """
-PPO agent for trading
+Transformer based PPO agent for trading version 4.2
 
+# this code
+- Multiple Actors (Parallelization): Implement multiple actors that collect data in parallel. This can significantly speed up data collection and can lead to more diverse experience, helping in stabilizing training.
+
+# TODO LIST
+- Hyperparameter Tuning: Use techniques like grid search, random search, or Bayesian optimization to find the best set of hyperparameters.
+- Noise Injection for Exploration: Inject noise into the policy or action space to encourage exploration. This can be particularly effective in continuous action spaces.
+- Automated Architecture Search: Use techniques like neural architecture search (NAS) to automatically find the most suitable network architecture.
+- HRL (Hierarchical Reinforcement Learning): Use hierarchical reinforcement learning to learn sub-policies for different tasks. Master agent would distribute capital among sub-agents for different tickers.
+
+Some notes on the code:
+- learning of the agent is fast (3.38s for batch of 8192 and mini-batch of 256)
+- higher number of epochs agent would less likely to take a neutral position
+
+Reward testing:tral p
+- higher penalty for wrong actions this would make agent more likely to take a neuosition
+- higher number of epochs agent would less likely to take a neutral position
+- premium for holding position agent would less likely to change position
 """
 import numpy as np
 import pandas as pd
@@ -67,7 +84,6 @@ def reward_calculation(previous_close, current_close, previous_position, current
 
     return final_reward
 
-
 class PPOMemory:
     def __init__(self, batch_size, device):
         self.states = None
@@ -76,34 +92,28 @@ class PPOMemory:
         self.vals = None
         self.rewards = None
         self.dones = None
+        self.static_states = None
         self.batch_size = batch_size
 
         self.clear_memory()
         self.device = device
 
-    # TODO try to implement this function
-    """
-    def generate_batches(self):
-    indices = torch.arange(len(self.states), dtype=torch.int64)
-    batches = torch.split(indices, self.batch_size)
-    return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
-
-    """
     def generate_batches(self):
         n_states = len(self.states)
         batch_start = torch.arange(0, n_states, self.batch_size)
         indices = torch.arange(n_states, dtype=torch.int64)
         batches = [indices[i:i + self.batch_size] for i in batch_start]
 
-        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, batches
+        return self.states, self.actions, self.probs, self.vals, self.rewards, self.dones, self.static_states, batches
 
-    def store_memory(self, state, action, probs, vals, reward, done):
+    def store_memory(self, state, action, probs, vals, reward, done, static_state):
         self.states.append(torch.tensor(state, dtype=torch.float).unsqueeze(0))
         self.actions.append(torch.tensor(action, dtype=torch.long).unsqueeze(0))
         self.probs.append(torch.tensor(probs, dtype=torch.float).unsqueeze(0))
         self.vals.append(torch.tensor(vals, dtype=torch.float).unsqueeze(0))
         self.rewards.append(torch.tensor(reward, dtype=torch.float).unsqueeze(0))
         self.dones.append(torch.tensor(done, dtype=torch.bool).unsqueeze(0))
+        self.static_states.append(torch.tensor(static_state, dtype=torch.float).unsqueeze(0))
 
     def clear_memory(self):
         self.states = []
@@ -112,6 +122,7 @@ class PPOMemory:
         self.vals = []
         self.rewards = []
         self.dones = []
+        self.static_states = []
 
     def stack_tensors(self):
         self.states = torch.cat(self.states, dim=0).to(self.device)
@@ -120,58 +131,95 @@ class PPOMemory:
         self.vals = torch.cat(self.vals, dim=0).to(self.device)
         self.rewards = torch.cat(self.rewards, dim=0).to(self.device)
         self.dones = torch.cat(self.dones, dim=0).to(self.device)
+        self.static_states = torch.cat(self.static_states, dim=0).to(self.device)
 
 
-class BaseNetwork(nn.Module):
-    def __init__(self, input_dims, output_dims, dropout_rate=0.2):
-        super(BaseNetwork, self).__init__()
-        self.layers = nn.ModuleList()
-        self.batch_norms = nn.ModuleList()
+class ActorNetwork(nn.Module):
+    def __init__(self, n_actions, input_dims, n_heads=4, n_layers=2, dropout_rate=1/4, static_input_dims=1):
+        super(ActorNetwork, self).__init__()
+        self.input_dims = input_dims
+        self.static_input_dims = static_input_dims
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.dropout_rate = dropout_rate
 
-        layer_dims = [1024, 512, 256]
-        for i in range(len(layer_dims)):
-            self.layers.append(nn.Linear(input_dims if i == 0 else layer_dims[i-1], layer_dims[i]))
-            self.batch_norms.append(nn.BatchNorm1d(layer_dims[i]))
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
 
-        self.final_layer = nn.Linear(layer_dims[-1], output_dims)
+        self.max_position_embeddings = 128
+        self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
+        self.fc_static = nn.Linear(static_input_dims, input_dims)
+
+        self.fc1 = nn.Linear(input_dims * 2, 512)
+        self.ln1 = nn.LayerNorm(512)
+        self.fc2 = nn.Linear(512, 256)
+        self.ln2 = nn.LayerNorm(256)
+        self.fc3 = nn.Linear(256, n_actions)
+
         self.relu = nn.LeakyReLU()
-        self.dropout = nn.Dropout(dropout_rate)
-
-    def forward(self, state):
-        x = state
-        for layer, bn in zip(self.layers, self.batch_norms):
-            x = layer(x)
-            if x.size(0) > 1:  # Apply batch normalization only if batch size > 1
-                x = bn(x)
-            x = self.relu(x)
-            x = self.dropout(x)
-        return x
-
-class ActorNetwork(BaseNetwork):
-    def __init__(self, n_actions, input_dims, dropout_rate=0.2):
-        super(ActorNetwork, self).__init__(input_dims, n_actions, dropout_rate)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, state):
-        x = super(ActorNetwork, self).forward(state)
-        x = self.final_layer(x)
-        x = self.softmax(x)
+    def forward(self, dynamic_state, static_state):
+        batch_size, seq_length, _ = dynamic_state.size()
+        positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
+
+        dynamic_state = dynamic_state + positional_encoding
+        transformer_out = self.transformer_encoder(dynamic_state)
+
+        static_state_encoded = self.fc_static(static_state.unsqueeze(1))
+        combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
+
+        x = self.relu(self.fc1(combined_features))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+
+        return self.softmax(x)
+
+
+class CriticNetwork(nn.Module):
+    def __init__(self, input_dims, n_heads=4, n_layers=2, dropout_rate=1 / 4, static_input_dims=1):
+        super(CriticNetwork, self).__init__()
+        self.input_dims = input_dims
+        self.static_input_dims = static_input_dims
+        self.n_heads = n_heads
+        self.n_layers = n_layers
+        self.dropout_rate = dropout_rate
+
+        encoder_layers = TransformerEncoderLayer(d_model=input_dims, nhead=n_heads, dropout=dropout_rate, batch_first=True)
+        self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=n_layers)
+
+        self.max_position_embeddings = 128
+        self.positional_encoding = nn.Parameter(torch.zeros(1, self.max_position_embeddings, input_dims))
+        self.fc_static = nn.Linear(static_input_dims, input_dims)
+
+        self.fc1 = nn.Linear(input_dims * 2, 512)
+        self.ln1 = nn.LayerNorm(512)
+        self.fc2 = nn.Linear(512, 256)
+        self.ln2 = nn.LayerNorm(256)
+        self.fc3 = nn.Linear(256, 1)
+        self.relu = nn.LeakyReLU()
+
+    def forward(self, dynamic_state, static_state):
+        batch_size, seq_length, _ = dynamic_state.size()
+        positional_encoding = self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
+
+        dynamic_state = dynamic_state + positional_encoding
+        transformer_out = self.transformer_encoder(dynamic_state)
+
+        static_state_encoded = self.fc_static(static_state.unsqueeze(1))
+        combined_features = torch.cat((transformer_out[:, -1, :], static_state_encoded.squeeze(1)), dim=1)
+
+        x = self.relu(self.fc1(combined_features))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+
         return x
 
-class CriticNetwork(BaseNetwork):
-    def __init__(self, input_dims, dropout_rate=0.2):
-        super(CriticNetwork, self).__init__(input_dims, 1, dropout_rate)
 
-    def forward(self, state):
-        x = super(CriticNetwork, self).forward(state)
-        q = self.final_layer(x)
-        return q
-
-
-class PPO_Agent_NN_1D_EURUSD:
+class PPO_Agent_T_1D_EURUSD:
     def __init__(self, n_actions, input_dims, gamma=0.95, alpha=0.001, gae_lambda=0.9, policy_clip=0.2, batch_size=1024,
                  n_epochs=20, mini_batch_size=128, entropy_coefficient=0.01, ec_decay_rate=0.999, weight_decay=0.0001, l1_lambda=1e-5,
-                 lr_decay_rate=0.99):
+                 static_input_dims=1, lr_decay_rate=0.99):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Not sure why CPU is faster
         # self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
@@ -187,8 +235,8 @@ class PPO_Agent_NN_1D_EURUSD:
         self.n_actions = n_actions  # Number of actions
 
         # Initialize the actor and critic networks with static input dimensions
-        self.actor = ActorNetwork(self.n_actions, input_dims).to(self.device)
-        self.critic = CriticNetwork(input_dims).to(self.device)
+        self.actor = ActorNetwork(self.n_actions, input_dims, static_input_dims=static_input_dims).to(self.device)
+        self.critic = CriticNetwork(input_dims, static_input_dims=static_input_dims).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=alpha, weight_decay=weight_decay)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=alpha, weight_decay=weight_decay)
 
@@ -202,9 +250,9 @@ class PPO_Agent_NN_1D_EURUSD:
         # track the generation of the agent
         self.generation = 0
 
-    def store_transition(self, state, action, probs, vals, reward, done):
+    def store_transition(self, state, action, probs, vals, reward, done, static_state):
         # Include static_state in the memory storage
-        self.memory.store_memory(state, action, probs, vals, reward, done)
+        self.memory.store_memory(state, action, probs, vals, reward, done, static_state)
 
     def learn(self):
         # track the time it takes to learn
@@ -218,7 +266,7 @@ class PPO_Agent_NN_1D_EURUSD:
         self.memory.stack_tensors()
 
         # Generating the data for the entire batch, including static states
-        state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, batches = self.memory.generate_batches()
+        state_arr, action_arr, old_prob_arr, vals_arr, reward_arr, dones_arr, static_states_arr, batches = self.memory.generate_batches()
 
         # Convert arrays to tensors and move to the device
         state_arr = state_arr.clone().detach().to(self.device)  # Dynamic states ie time series data
@@ -227,6 +275,7 @@ class PPO_Agent_NN_1D_EURUSD:
         vals_arr = vals_arr.clone().detach().to(self.device)  # State values
         reward_arr = reward_arr.clone().detach().to(self.device)  # Rewards
         dones_arr = dones_arr.clone().detach().to(self.device)  # Done flags
+        static_states_arr = static_states_arr.clone().detach().to(self.device)  # Static states
 
         # Compute advantages and discounted rewards
         advantages, discounted_rewards = self.compute_discounted_rewards(reward_arr, vals_arr,
@@ -252,6 +301,7 @@ class PPO_Agent_NN_1D_EURUSD:
                 batch_old_probs = old_prob_arr[minibatch_indices].clone().detach().to(self.device)
                 batch_advantages = advantages[minibatch_indices].clone().detach().to(self.device)
                 batch_returns = discounted_rewards[minibatch_indices].clone().detach().to(self.device)
+                batch_static_states = static_states_arr[minibatch_indices].clone().detach().to(self.device)
 
                 # Zero the gradients before the backward pass
                 self.actor_optimizer.zero_grad()
@@ -263,7 +313,7 @@ class PPO_Agent_NN_1D_EURUSD:
                                                                                        batch_old_probs,
                                                                                        batch_advantages,
                                                                                        batch_returns,
-                                                                                       )
+                                                                                       batch_static_states)
 
                 # Perform backpropagation and optimization steps for both actor and critic networks
                 actor_loss.backward()
@@ -292,25 +342,38 @@ class PPO_Agent_NN_1D_EURUSD:
         print(f"Learning of agent generation {self.generation} completed in {episode_time} seconds")
         print("-" * 100)
 
-    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages, batch_returns):
-        # Calculate new action probabilities and values from the critic
-        new_probs = self.actor(batch_states)
-        new_dist = torch.distributions.Categorical(new_probs)
-        new_log_probs = new_dist.log_prob(batch_actions)
+    def calculate_loss(self, batch_states, batch_actions, batch_old_probs, batch_advantages,
+                       batch_returns, batch_static_states):
+        # Ensure batch_states has the correct 3D shape: [batch size, sequence length, feature dimension]
+        if batch_states.dim() == 2:
+            batch_states = batch_states.unsqueeze(1)
+
+        # Actor loss calculations
+        new_probs = self.actor(batch_states, batch_static_states)
+
+        # Calculate the probability ratio and the surrogate loss
+        dist = torch.distributions.Categorical(new_probs)
+
+        # Calculate the log probability of the action in the distribution
+        new_log_probs = dist.log_prob(batch_actions)
 
         # Calculate the probability ratio
         prob_ratios = torch.exp(new_log_probs - batch_old_probs)
 
-        # Calculate the clipped surrogate PPO objective
+        # Calculate the surrogate loss
         surr1 = prob_ratios * batch_advantages
+
+        # Clipped surrogate loss
         surr2 = torch.clamp(prob_ratios, 1.0 - self.policy_clip, 1.0 + self.policy_clip) * batch_advantages
-        actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * new_dist.entropy().mean()
 
-        # Calculate critic loss
-        values = self.critic(batch_states).squeeze(-1)
-        critic_loss = (batch_returns - values).pow(2).mean()
+        # Actor loss
+        actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coefficient * dist.entropy().mean()
 
-        return new_probs, new_dist.entropy(), actor_loss, critic_loss
+        # Critic loss calculations
+        critic_values = self.critic(batch_states, batch_static_states).squeeze(-1)
+        critic_loss = (batch_returns - critic_values).pow(2).mean()
+
+        return new_probs, dist.entropy(), actor_loss, critic_loss
 
     def compute_discounted_rewards(self, rewards, values, dones):
         n = len(rewards)
@@ -336,33 +399,60 @@ class PPO_Agent_NN_1D_EURUSD:
         return advantages, discounted_rewards
 
     @torch.no_grad()
-    def choose_action(self, observation, current_position):
-        """
-        Selects an action based on the current policy and exploration noise.
-        """
+    def choose_action(self, observation, static_input):
+        # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = np.array(observation).reshape(1, -1)
+        # Reshape observation to [1, sequence length, feature dimension]
+        observation = observation.reshape(1, -1, observation.shape[-1])
+
+        # Convert observation and static_input to tensors and move them to the appropriate device
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        probs = self.actor(state)
+        static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
 
+        # Ensure state has the correct 3D shape: [batch size, sequence length, feature dimension]
+        if state.dim() != 3:  # Add missing dimensions if necessary
+            state = state.view(1, -1, state.size(-1))
+
+        # Pass the state and static_input_tensor through the actor network to get the action probabilities
+        probs = self.actor(state, static_input_tensor)
+
+        # Create a categorical distribution over the list of probabilities of actions
         dist = torch.distributions.Categorical(probs)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        value = self.critic(state)
 
+        # Sample an action from the distribution
+        action = dist.sample()
+
+        # Calculate the log probability of the action in the distribution
+        log_prob = dist.log_prob(action)
+
+        # Pass the state and static_input_tensor through the critic network to get the state value
+        value = self.critic(state, static_input_tensor)
+
+        # Return the sampled action, its log probability, and the state value
+        # Convert tensors to Python numbers using .item()
         return action.item(), log_prob.item(), value.item()
 
     @torch.no_grad()
-    def get_action_probabilities(self, observation, current_position):
+    def get_action_probabilities(self, observation, static_input):
+        # Ensure observation is a NumPy array
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
 
-        observation = np.append(observation, current_position)
-        observation = np.array(observation).reshape(1, -1)
+        # Reshape observation to [1, sequence length, feature dimension]
+        observation = observation.reshape(1, -1, observation.shape[-1])
+
+        # Convert observation and static_input to tensors and move them to the appropriate device
         state = torch.tensor(observation, dtype=torch.float).to(self.device)
-        action_probs = self.actor(state)
+        static_input_tensor = torch.tensor([static_input], dtype=torch.float).to(self.device)
+
+        # Ensure state has the correct 3D shape: [batch size, sequence length, feature dimension]
+        if state.dim() != 3:  # Add missing dimensions if necessary
+            state = state.view(1, -1, state.size(-1))
+
+        # Pass the state and static_input_tensor through the actor network to get the action probabilities
+        action_probs = self.actor(state, static_input_tensor)
 
         # Ensure action_probs does not contain any gradients and convert it to a NumPy array
         action_probs = action_probs.detach().cpu().numpy()
@@ -374,8 +464,9 @@ class PPO_Agent_NN_1D_EURUSD:
         return action_probs
 
     @torch.no_grad()
-    def choose_best_action(self, observation, current_position):
-        action_probs = self.get_action_probabilities(observation, current_position)
+    def choose_best_action(self, observation, static_input):
+        # Use the get_action_probabilities method to get the action probabilities for the given observation and static input
+        action_probs = self.get_action_probabilities(observation, static_input)
 
         # Choose the action with the highest probability
         best_action = np.argmax(action_probs)
@@ -406,9 +497,10 @@ if __name__ == '__main__':
     final_test_results = pd.DataFrame()
     final_balance = 10000
 
+    # Stock market variables
     indicators = [
         {"indicator": "RSI", "mkf": "EURUSD", "length": 14},
-        {"indicator": "ATR", "mkf": "EURUSD", "length": 24},
+        {"indicator": "ATR", "mkf": "EURUSD", "length": 36},
         {"indicator": "MACD", "mkf": "EURUSD"},
         {"indicator": "Stochastic", "mkf": "EURUSD"}, ]
 
@@ -420,14 +512,17 @@ if __name__ == '__main__':
     ]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "standardize"},
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Close", "EURJPY"), "edit": "standardize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "standardize"},
+        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
         {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_24", "EURUSD"), "edit": "standardize"},
-        # {"variable": ("sin_time_1W", ""), "edit": None},
-        # {"variable": ("cos_time_1W", ""), "edit": None},
+        {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
+        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        {"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -448,42 +543,52 @@ if __name__ == '__main__':
         print("test_date", test_date)
         print("end_date", end_date)
 
+        # Example usage
+        # Stock market variables
         df = load_data_parallel(['EURUSD', 'USDJPY', 'EURJPY', 'GBPUSD'], '1D')
 
         add_indicators(df, indicators)
         add_returns(df, return_indicators)
 
         add_time_sine_cosine(df, '1W')
+        df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+        df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+        df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
         df = df.dropna()
-        df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[test_date:end_date]
 
+        # data before 2006 has some missing values ie gaps in the data, also in march, april 2023 there are some gaps
+        df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
+                                                                                                    test_date:end_date]
+
+        # Add the last look_back rows of the training data to the validation and test datasets to start making decisions
+        # at first observation in the validation and test datasets
         df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
         df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
         window_size = '1Y'
         starting_balance = final_balance
-        # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
 
         # Environment parameters
-        num_episodes = 4000  # 100
+        num_episodes = 5000 # 50
 
         # Create an instance of the agent
-        agent = PPO_Agent_NN_1D_EURUSD(n_actions=3,  # sell, hold money, buy
-                                       input_dims=len(variables) * look_back + 1,  # input dimensions
-                                       gamma=0.75,  # discount factor of future rewards
-                                       alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
-                                       gae_lambda=0.75,  # lambda for generalized advantage estimation
-                                       policy_clip=0.15,  # clip parameter for PPO
-                                       entropy_coefficient=10,  # higher entropy coefficient encourages exploration
-                                       ec_decay_rate=0.993,  # entropy coefficient decay rate
-                                       batch_size=1024,  # size of the memory
-                                       n_epochs=1,  # number of epochs
-                                       mini_batch_size=128,  # size of the mini-batches
-                                       weight_decay=0.0000005,  # weight decay
-                                       l1_lambda=1e-7,  # L1 regularization lambda
-                                       lr_decay_rate=0.99,  # learning rate decay rate
-                                       )
+        agent = PPO_Agent_T_1D_EURUSD(n_actions=3,  # sell, hold money, buy
+                                      input_dims=len(variables) * look_back,  # input dimensions
+                                      gamma=0.75,  # discount factor of future rewards
+                                      alpha=0.0005,  # learning rate for networks (actor and critic) high as its decaying at least 0.0001
+                                      gae_lambda=0.75,  # lambda for generalized advantage estimation
+                                      policy_clip=0.25,  # clip parameter for PPO
+                                      entropy_coefficient=10,  # higher entropy coefficient encourages exploration
+                                      ec_decay_rate=0.99,  # entropy coefficient decay rate
+                                      batch_size=1024,  # size of the memory
+                                      n_epochs=1,  # number of epochs
+                                      mini_batch_size=128,  # size of the mini-batches
+                                      weight_decay=0.0000005,  # weight decay
+                                      l1_lambda=1e-7,  # L1 regularization lambda
+                                      static_input_dims=1,  # static input dimensions (current position)
+                                      lr_decay_rate=0.995,  # learning rate decay rate
+                                      )
 
         total_rewards, episode_durations, total_balances = [], [], []
         episode_probabilities = {'train': [], 'validation': [], 'test': []}
@@ -506,8 +611,6 @@ if __name__ == '__main__':
         dataset_iterator = cycle(rolling_datasets)
 
         backtest_results, probs_dfs, balances_dfs = {}, {}, {}
-
-        # Initialize the agent generation
         generation = 0
 
         for episode in tqdm(range(num_episodes)):
@@ -527,14 +630,12 @@ if __name__ == '__main__':
             observation = env.reset()
             done = False
             initial_balance = env.balance
-            observation = np.append(observation, 0)
 
             while not done:
                 current_position = env.current_position
                 action, prob, val = agent.choose_action(observation, env.current_position)
                 observation_, reward, done, info = env.step(action)
-                observation_ = np.append(observation_, current_position)
-                agent.store_transition(observation, action, prob, val, reward, done)
+                agent.store_transition(observation, action, prob, val, reward, done, current_position)
                 observation = observation_
 
                 # Check if enough data is collected or if the dataset ends
@@ -542,6 +643,7 @@ if __name__ == '__main__':
                     agent.learn()
                     agent.memory.clear_memory()
 
+                # Backtesting
                 if generation < agent.generation:
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         futures = []
@@ -557,7 +659,6 @@ if __name__ == '__main__':
                         # Process futures as they complete
                         for future, label in futures:
                             result = future.result()
-                            # Make sure to update these variables to match the exact structure of the data being returned
                             balance, total_reward, number_of_trades, probs_df, action_df, sharpe_ratio, max_drawdown, \
                                 sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
                                 average_trade_duration, in_long, in_short, in_out_of_market = result
@@ -605,8 +706,8 @@ if __name__ == '__main__':
 
         buy_and_hold_agent = Buy_and_hold_Agent()
         sell_and_hold_agent = Sell_and_hold_Agent()
-        # TODO
-        # Run backtesting for both agents
+
+        # Run backtesting for both agents benchmarks
         bah_results, _, benchmark_BAH = BF.run_backtesting(
             buy_and_hold_agent, 'BAH', val_rolling_datasets + test_rolling_datasets, val_labels + test_labels,
             BF.backtest_wrapper, tradable_markets, look_back, variables, provision, starting_balance, leverage,
@@ -685,7 +786,7 @@ if __name__ == '__main__':
 
         # save also number of trades and provision sum
         provision_sum_test_final = provision_sum_test_final + \
-                                   best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
+                                    best_result_dict.get((agent.get_name(), 'Provision Sum'), 0)[agent_generation]
 
         # add year to the dates
         validation_date = (datetime.strptime(validation_date, '%Y-%m-%d') + relativedelta(years=1)).strftime('%Y-%m-%d')
@@ -698,6 +799,11 @@ if __name__ == '__main__':
 
     add_indicators(df, indicators)
     add_returns(df, return_indicators)
+
+    add_time_sine_cosine(df, '1W')
+    df[("sin_time_1W", "")] = df[("sin_time_1W", "")] / 2 + 0.5
+    df[("cos_time_1W", "")] = df[("cos_time_1W", "")] / 2 + 0.5
+    df[("RSI_14", "EURUSD")] = df[("RSI_14", "EURUSD")] / 100
 
     add_time_sine_cosine(df, '1W')
 
@@ -735,14 +841,14 @@ if __name__ == '__main__':
                              'sell and hold sharpe ratio': sah_results_prepared[('SAH', 'Sharpe Ratio')][0],
                              'buy and hold sharpe ratio': bah_results_prepared[('BAH', 'Sharpe Ratio')][0]})
 
-    print(f"Final Balance: {final_balance:.2f}")
-    # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
-    # 12100 good one
-    print(statistic_report)
     statistic_report = pd.DataFrame([statistic_report])
     #statistic_report.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\statistic_report_{agent.get_name()}.csv', index=False)
 
     # Save final_test_results to a CSV file
     #final_test_results.to_csv(fr'C:\Users\jmask\OneDrive\Pulpit\RL_magisterka\{tradable_markets}\final_test_results_{agent.get_name()}.csv', index=False)
 
+    print(f"Final Balance: {final_balance:.2f}")
+    # 12605 PogChamp benchmark add sharpe of this strategy # sharpe 1.55
+    # 12100 good one
+    print(statistic_report)
     print('end')

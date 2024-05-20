@@ -512,17 +512,17 @@ if __name__ == '__main__':
     ]
 
     variables = [
-        {"variable": ("Close", "USDJPY"), "edit": "normalize"},
-        {"variable": ("Close", "EURUSD"), "edit": "normalize"},
-        {"variable": ("Close", "EURJPY"), "edit": "normalize"},
-        {"variable": ("Close", "GBPUSD"), "edit": "normalize"},
-        {"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
-        {"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
-        {"variable": ("K%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("D%", "EURUSD"), "edit": "standardize"},
-        {"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
-        {"variable": ("cos_time_1W", ""), "edit": None},
+        #{"variable": ("Close", "USDJPY"), "edit": "normalize"},
+        #{"variable": ("Close", "EURUSD"), "edit": "normalize"},
+        #{"variable": ("Close", "EURJPY"), "edit": "normalize"},
+        #{"variable": ("Close", "GBPUSD"), "edit": "normalize"},
+        #{"variable": ("RSI_14", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("ATR_36", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("K%", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("D%", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("MACD_Line", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("Signal_Line", "EURUSD"), "edit": "standardize"},
+        #{"variable": ("cos_time_1W", ""), "edit": None},
         {"variable": ("Returns_Close", "EURUSD"), "edit": None},
         {"variable": ("Returns_Close", "USDJPY"), "edit": None},
         {"variable": ("Returns_Close", "EURJPY"), "edit": None},
@@ -570,7 +570,7 @@ if __name__ == '__main__':
         starting_balance = final_balance
 
         # Environment parameters
-        num_episodes = 5000 # 50
+        num_episodes = 7500  # 50
 
         # Create an instance of the agent
         agent = PPO_Agent_T_1D_EURUSD(n_actions=3,  # sell, hold money, buy

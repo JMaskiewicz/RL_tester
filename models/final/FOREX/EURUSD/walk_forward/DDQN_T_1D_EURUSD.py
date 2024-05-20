@@ -475,13 +475,13 @@ if __name__ == '__main__':
         # Provision is the cost of trading, it is a percentage of the trade size, current real provision on FOREX is 0.0001
 
         # Environment parameters
-        num_episodes = 5000  # 100
+        num_episodes = 4000  # 100
 
         # Instantiate the agent
         agent = DDQN_Agent_T_1D_EURUSD(input_dims=len(variables) * look_back,  # input dimensions
                                        n_actions=3,  # buy, sell, hold
                                        n_epochs=1,  # number of epochs 10
-                                       mini_batch_size=64,  # mini batch size 128
+                                       mini_batch_size=128,  # mini batch size 128
                                        policy_alpha=0.0005,  # learning rate for the policy network  0.0005
                                        target_alpha=0.00005,  # learning rate for the target network
                                        gamma=0.75,  # discount factor 0.99
@@ -494,7 +494,7 @@ if __name__ == '__main__':
                                        weight_decay=0.000005,  # Weight decay
                                        l1_lambda=0.00000005,  # L1 regularization lambda
                                        lr_decay_rate=0.995,   # Learning rate decay rate
-                                       lambda_=0.5,  # Lambda for TD(lambda) learning
+                                       lambda_=0.75,  # Lambda for TD(lambda) learning
                                        )
 
         total_rewards, episode_durations, total_balances = [], [], []

@@ -5,7 +5,16 @@ import pandas as pd
 from time import perf_counter, sleep
 from functools import wraps
 from typing import Callable, Any
+import random
+import numpy as np
 
+def set_seeds(seed=0):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def get_time(func: Callable) -> Callable:
     @wraps(func)
