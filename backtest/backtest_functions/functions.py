@@ -13,14 +13,19 @@ from concurrent.futures import ThreadPoolExecutor
 def calculate_drawdown_duration(drawdown):
     # Identifying the drawdown periods
     is_drawdown = drawdown < 0
+
     # Start a new group every time there is a change from drawdown to non-drawdown
     drawdown_groups = is_drawdown.ne(is_drawdown.shift()).cumsum()
+
     # Filter out only the drawdown periods
     drawdown_periods = drawdown_groups[is_drawdown]
+
     # Count consecutive indexes in each drawdown period
     drawdown_durations = drawdown_periods.groupby(drawdown_periods).transform('count')
+
     # The longest duration of drawdown
     max_drawdown_duration = drawdown_durations.max()
+
     return max_drawdown_duration
 
 #@get_time
@@ -74,7 +79,9 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
     return backtest_results, probs_dfs, balances_dfs
 
 
-def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision=0.001, starting_balance=10000, leverage=1, Trading_Environment_Basic=None, reward_function=None):
+def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, variables, provision=0.001,
+                                      starting_balance=10000, leverage=1, Trading_Environment_Basic=None,
+                                      reward_function=None, annualization_factor=365):
     """
     # TODO add description
     """
@@ -115,7 +122,7 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
 
     # KPI Calculations
     returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df)-env.look_back) if returns.std() > 1e-6 else float('nan')
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(annualization_factor) if returns.std() > 1e-6 else float('nan')
 
     cumulative_returns = (1 + returns).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
@@ -124,9 +131,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     max_drawdown_duration = calculate_drawdown_duration(drawdown)
 
     negative_volatility = returns[returns < 0].std()
-    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(len(df)-env.look_back) if negative_volatility > 1e-6 else float('nan')
+    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(annualization_factor) if negative_volatility > 1e-6 else float('nan')
 
-    annual_return = cumulative_returns.iloc[-1] ** ((len(df)-env.look_back) / len(returns)) - 1
+    annual_return = cumulative_returns.iloc[-1] ** ((annualization_factor) / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
@@ -196,14 +203,14 @@ def calculate_number_of_trades_and_duration(actions):
 
     return num_trades, avg_duration
 
-def generate_result_statistics(df, strategy_column, balance_column, provision_sum, look_back=1):
+def generate_result_statistics(df, strategy_column, balance_column, provision_sum, look_back=1, annualization_factor=365):
     df = df.reset_index(drop=True)
 
     # Calculate returns
     returns = df[balance_column].pct_change().dropna()
 
     # Calculate Sharpe Ratio
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(len(df) - look_back) if returns.std() > 1e-6 else float(
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(annualization_factor) if returns.std() > 1e-6 else float(
         'nan')
 
     # Calculate Cumulative Returns
@@ -216,10 +223,10 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
 
     # Calculate Sortino Ratio
     negative_volatility = returns[returns < 0].std()
-    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(len(df) - look_back) if negative_volatility > 1e-6 else float('nan')
+    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(annualization_factor) if negative_volatility > 1e-6 else float('nan')
 
     # Calculate Annual Return and Calmar Ratio
-    annual_return = cumulative_returns.iloc[-1] ** ((len(df) - look_back) / len(returns)) - 1
+    annual_return = cumulative_returns.iloc[-1] ** ((annualization_factor) / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Calculate Number of Trades and Average Duration
