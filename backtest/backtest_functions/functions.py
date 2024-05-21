@@ -215,8 +215,8 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     max_drawdown_duration = calculate_drawdown_duration(drawdown)
 
     # Calculate Sortino Ratio
-    negative_volatility = returns[returns < 0].std() * np.sqrt(len(df) - look_back)
-    sortino_ratio = returns.mean() / negative_volatility if negative_volatility > 1e-6 else float('nan')
+    negative_volatility = returns[returns < 0].std()
+    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(len(df) - look_back) if negative_volatility > 1e-6 else float('nan')
 
     # Calculate Annual Return and Calmar Ratio
     annual_return = cumulative_returns.iloc[-1] ** ((len(df) - look_back) / len(returns)) - 1
