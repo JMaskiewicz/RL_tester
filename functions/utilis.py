@@ -55,7 +55,8 @@ def prepare_backtest_results(backtest_results, agent_name):
         'Max Drawdown Duration': [],
         'In Long': [],
         'In Short': [],
-        'Out of Market': []
+        'Out of Market': [],
+        'Win Rate': [],
     }
 
     # Extract data from backtest_results and append to lists
@@ -77,6 +78,7 @@ def prepare_backtest_results(backtest_results, agent_name):
             data['In Long'].append(metrics.get('In Long', 0))
             data['In Short'].append(metrics.get('In Short', 0))
             data['Out of Market'].append(metrics.get('Out of Market', 0))
+            data['Win Rate'].append(metrics.get('Win Rate', 0))
 
     # Creating a DataFrame from the lists
     df = pd.DataFrame(data)
