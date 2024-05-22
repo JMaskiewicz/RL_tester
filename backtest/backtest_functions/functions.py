@@ -83,12 +83,32 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
                                       starting_balance=10000, leverage=1, Trading_Environment_Basic=None,
                                       reward_function=None, annualization_factor=365):
     """
-    # TODO add description
+    Generate predictions and backtest a trading agent.
+
+    Parameters:
+        agent_type (str): The type of agent (e.g., 'PPO', 'DQN').
+        df (pd.DataFrame): The dataframe containing market data.
+        agent: The trading agent.
+        mkf (list): List of market features.
+        look_back (int): The look-back period for the environment.
+        variables (list): List of variables to use in the environment.
+        provision (float): The trading provision or fee.
+        starting_balance (float): The starting balance for the backtest.
+        leverage (float): The leverage for the backtest.
+        Trading_Environment_Basic (class): The trading environment class.
+        reward_function (function): The reward function for the environment.
+        annualization_factor (int): The factor for annualizing metrics.
+
+    Returns:
+        tuple: A tuple containing various backtest results and statistics.
     """
     action_probabilities_list = []
     best_action_list = []
     balances = []
     number_of_trades = 0
+    profitable_trades = 0
+    entry_price = 0
+    provision_cost = 0
 
     # Preparing the environment
     if agent_type == 'PPO':
@@ -101,28 +121,51 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
         # Create a backtesting environment
         env = Trading_Environment_Basic(df, look_back=look_back, variables=variables,
                                         tradable_markets=mkf, provision=provision,
-                                        initial_balance=starting_balance, leverage=leverage, reward_function=reward_function)
+                                        initial_balance=starting_balance, leverage=leverage,
+                                        reward_function=reward_function)
 
         observation = env.reset()
         done = False
 
-        while not done:  # TODO check if this is correct
+        while not done:
             action_probs = agent.get_action_probabilities(observation, env.current_position)
             best_action = np.argmax(action_probs)
 
-            if (best_action-1) != env.current_position and abs(best_action-1) == 1:
+            if (best_action - 1) != env.current_position and abs(best_action - 1) == 1:
+                if env.current_position != 0:  # Check if there was an open position
+                    exit_price = env.current_price
+                    if env.current_position == 1:  # Long position
+                        if (exit_price - entry_price - provision_cost) > 0:
+                            profitable_trades += 1
+                    elif env.current_position == -1:  # Short position
+                        if (entry_price - exit_price - provision_cost) > 0:
+                            profitable_trades += 1
+
                 number_of_trades += 1
+                entry_price = env.current_price
+                provision_cost = env.provision
 
             observation_, reward, done, info = env.step(best_action)
             observation = observation_
 
             balances.append(env.balance)  # Update balances
             action_probabilities_list.append(action_probs.tolist())
-            best_action_list.append(best_action-1)
+            best_action_list.append(best_action - 1)
+
+        # For the last trade
+        if env.current_position != 0:
+            exit_price = env.current_price
+            if env.current_position == 1:  # Long position
+                if (exit_price - entry_price - provision_cost) > 0:
+                    profitable_trades += 1
+            elif env.current_position == -1:  # Short position
+                if (entry_price - exit_price - provision_cost) > 0:
+                    profitable_trades += 1
 
     # KPI Calculations
     returns = pd.Series(balances).pct_change().dropna()
-    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(annualization_factor) if returns.std() > 1e-6 else float('nan')
+    sharpe_ratio = returns.mean() / returns.std() * np.sqrt(annualization_factor) if returns.std() > 1e-6 else float(
+        'nan')
 
     cumulative_returns = (1 + returns).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
@@ -131,7 +174,8 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     max_drawdown_duration = calculate_drawdown_duration(drawdown)
 
     negative_volatility = returns[returns < 0].std()
-    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(annualization_factor) if negative_volatility > 1e-6 else float('nan')
+    sortino_ratio = returns.mean() / negative_volatility * np.sqrt(
+        annualization_factor) if negative_volatility > 1e-6 else float('nan')
 
     annual_return = cumulative_returns.iloc[-1] ** ((annualization_factor) / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
@@ -157,9 +201,11 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     elif agent_type == 'DQN':
         agent.q_policy.train()
 
+    win_rate = profitable_trades / number_of_trades if number_of_trades > 0 else 0
+
     return (env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown,
             sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration,
-            average_trade_duration, in_long, in_short, in_out_of_market)
+            average_trade_duration, in_long, in_short, in_out_of_market, profitable_trades, win_rate)
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """

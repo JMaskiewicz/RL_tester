@@ -16,6 +16,7 @@ class Trading_Environment_Basic(gym.Env):
         self.initial_balance = initial_balance  # Initial balance
         self.capital_investment = 0
         self.open_price = 1
+        self.current_position = 0
 
         self.reward_sum = 0  # Initialize the reward sum
         self.current_position = 0  # This is a static part of the state
@@ -86,7 +87,6 @@ class Trading_Environment_Basic(gym.Env):
         action = action - 1  # convert action to -1, 0, 1
 
         # Get the current price and the price of the next time step for the reward calculation and PnL
-        current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
         next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
         provision_cost = 0
@@ -96,19 +96,22 @@ class Trading_Environment_Basic(gym.Env):
             self.capital_investment = self.balance
             provision_cost -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
             self.provision_sum -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
-            self.open_price = current_price
+            self.open_price = self.current_price
 
         # balance update
-        market_return = (next_price - current_price) * action / self.open_price if self.open_price != 0 else 0
+        market_return = (next_price - self.current_price) * action / self.open_price if self.open_price != 0 else 0
 
         # Update the balance
         self.balance += market_return * self.capital_investment * self.leverage + provision_cost
 
         # reward calculation with reward function on the top of the file (reward_calculation)
-        final_reward = self.reward_function(current_price, next_price, self.current_position, action, self.leverage, self.provision)
+        final_reward = self.reward_function(self.current_price, next_price, self.current_position, action, self.leverage, self.provision)
         self.reward_sum += final_reward  # Update the reward sum
         self.current_position = action  # Update the current position
         self.current_step += 1  # Increment the current step
+
+        # Update the current price
+        self.current_price = next_price
 
         # Check if the episode is done
         self.done = self.current_step >= len(self.df) - 1
