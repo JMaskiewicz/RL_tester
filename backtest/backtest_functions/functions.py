@@ -157,10 +157,10 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
         if env.current_position != 0:
             exit_price = env.current_price
             if env.current_position == 1:  # Long position
-                if (exit_price - entry_price - provision_cost) > 0:
+                if (exit_price * (1 - provision_cost)) > entry_price:
                     profitable_trades += 1
             elif env.current_position == -1:  # Short position
-                if (entry_price - exit_price - provision_cost) > 0:
+                if (entry_price * (1 - provision_cost)) > exit_price:
                     profitable_trades += 1
 
     # KPI Calculations
