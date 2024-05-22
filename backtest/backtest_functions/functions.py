@@ -244,11 +244,15 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     sortino_ratio = returns.mean() / negative_volatility * np.sqrt(annualization_factor) if negative_volatility > 1e-6 else float('nan')
 
     # Calculate Annual Return and Calmar Ratio
-    annual_return = cumulative_returns.iloc[-1] ** ((annualization_factor) / len(returns)) - 1
+    annual_return = cumulative_returns.iloc[-1] ** (annualization_factor / len(returns)) - 1
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Calculate Number of Trades and Average Duration
     num_trades, avg_duration = calculate_number_of_trades_and_duration(df[strategy_column])
+
+    # calculate profitable trades
+    profitable_trades = calculate_profitable_trades(df, strategy_column, balance_column)
+    win_rate = profitable_trades / num_trades if num_trades > 0 else float('nan')
 
     # Calculate the number of times the agent was in long, short, or out of the market
     in_long = df[df[strategy_column] == 'Long'].shape[0]
@@ -269,8 +273,33 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
         'In long': in_long / len(df),
         'In short': in_short / len(df),
         'In out of the market': out_of_market / len(df),
+        'Win Rate': win_rate,
     }
     return metrics
+
+
+def calculate_profitable_trades(df, strategy_column, balance_column):
+    trades = []
+    position = None
+    entry_balance = None
+
+    for i in range(len(df)):
+        current_position = df[strategy_column].iloc[i]
+        if current_position != position:
+            if position is not None and position != 'Neutral':
+                exit_balance = df[balance_column].iloc[i]
+                trades.append((exit_balance - entry_balance) > 0)
+            if current_position != 'Neutral':
+                entry_balance = df[balance_column].iloc[i]
+            position = current_position
+
+    if position is not None and position != 'Neutral':
+        exit_balance = df[balance_column].iloc[-1]
+        trades.append((exit_balance - entry_balance) > 0)
+
+    profitable_trades = sum(trades)
+    return profitable_trades
+
 
 if __name__ == '__main__':
     # test average trade duration
