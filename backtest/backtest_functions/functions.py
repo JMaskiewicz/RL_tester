@@ -283,11 +283,8 @@ def calculate_profitable_trades(df, strategy_column, balance_column, initial_cap
     initial_row = pd.DataFrame({balance_column: [initial_capital], strategy_column: [None]})
     df = pd.concat([initial_row, df], ignore_index=True)
 
-    # Filter out rows where strategy is 'Neutral'
-    filtered_df = df[df[strategy_column] != 'Neutral']
-
     # Drop consecutive duplicates in the strategy column
-    filtered_df = filtered_df.loc[(filtered_df[strategy_column] != filtered_df[strategy_column].shift())]
+    filtered_df = df.loc[(df[strategy_column] != df[strategy_column].shift())]
 
     # Calculate profitable trades where the balance has increased from the last trade
     profitable_trades = (filtered_df[balance_column].diff() > 0).sum()
