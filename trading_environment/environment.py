@@ -28,6 +28,10 @@ class Trading_Environment_Basic(gym.Env):
         self.reward_function = reward_function
         self.provision_sum = 0  # Initialize the provision sum
 
+        # number of trades
+        self.num_trades = 0
+        self.profitable_trades = 0
+
         # Reset the environment to initialize the state
         self.reset()
 
@@ -47,6 +51,10 @@ class Trading_Environment_Basic(gym.Env):
         self.balance = self.initial_balance
         self.reward_sum = 0
         self.provision_sum = 0
+
+        # reset the number of trades
+        self.num_trades = 0
+        self.profitable_trades = 0
 
         # Reset the current position
         if reset_position:
@@ -87,12 +95,21 @@ class Trading_Environment_Basic(gym.Env):
         action = action - 1  # convert action to -1, 0, 1
 
         # Get the current price and the price of the next time step for the reward calculation and PnL
+        self.current_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step]
         next_price = self.df[('Close', self.tradable_markets)].iloc[self.current_step + 1]
 
         provision_cost = 0
 
         # Provision cost calculation if the position has changed
         if action != self.current_position:
+            # update the number of trades
+            if action != 0:
+                self.num_trades += 1
+
+            # update the number of profitable trades
+            if (1 - self.provision) * self.current_position * (next_price - self.open_price) > 0:
+                self.profitable_trades += 1
+
             self.capital_investment = self.balance
             provision_cost -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
             self.provision_sum -= self.provision * (abs(action) == 1) * self.capital_investment * self.leverage
@@ -110,11 +127,14 @@ class Trading_Environment_Basic(gym.Env):
         self.current_position = action  # Update the current position
         self.current_step += 1  # Increment the current step
 
-        # Update the current price
-        self.current_price = next_price
-
         # Check if the episode is done
         self.done = self.current_step >= len(self.df) - 1
+
+        if self.done:
+            # close the open position
+            if (1 - self.provision) * self.current_position * (self.current_price - self.open_price) > 0:
+                print('profitable trade')
+                self.profitable_trades += 1
 
         return self._next_observation(), final_reward, self.done, {}
 

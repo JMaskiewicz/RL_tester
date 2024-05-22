@@ -106,10 +106,6 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     action_probabilities_list = []
     best_action_list = []
     balances = []
-    number_of_trades = 0
-    profitable_trades = 0
-    entry_price = 0
-    provision_cost = 0
 
     # Preparing the environment
     if agent_type == 'PPO':
@@ -128,40 +124,15 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
         observation = env.reset()
         done = False
 
-        while not done:
+        while not done:  # TODO check if this is correct
             action_probs = agent.get_action_probabilities(observation, env.current_position)
             best_action = np.argmax(action_probs)
-
-            if (best_action - 1) != env.current_position and abs(best_action - 1) == 1:
-                if env.current_position != 0:  # Check if there was an open position
-                    exit_price = env.current_price
-                    if env.current_position == 1:  # Long position
-                        if (exit_price - entry_price - provision_cost) > 0:
-                            profitable_trades += 1
-                    elif env.current_position == -1:  # Short position
-                        if (entry_price - exit_price - provision_cost) > 0:
-                            profitable_trades += 1
-
-                number_of_trades += 1
-                entry_price = env.current_price
-                provision_cost = env.provision
-
             observation_, reward, done, info = env.step(best_action)
             observation = observation_
 
             balances.append(env.balance)  # Update balances
             action_probabilities_list.append(action_probs.tolist())
-            best_action_list.append(best_action - 1)
-
-        # For the last trade
-        if env.current_position != 0:
-            exit_price = env.current_price
-            if env.current_position == 1:  # Long position
-                if (exit_price * (1 - provision_cost)) > entry_price:
-                    profitable_trades += 1
-            elif env.current_position == -1:  # Short position
-                if (entry_price * (1 - provision_cost)) > exit_price:
-                    profitable_trades += 1
+            best_action_list.append(best_action-1)
 
     # KPI Calculations
     returns = pd.Series(balances).pct_change().dropna()
@@ -202,9 +173,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
     elif agent_type == 'DQN':
         agent.q_policy.train()
 
-    win_rate = profitable_trades / number_of_trades if number_of_trades > 0 else 0
+    win_rate = env.profitable_trades / env.num_trades if env.num_trades > 0 else 0
 
-    return (env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, #7
+    return (env.balance, env.reward_sum, env.num_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, #7
             sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration, #7
             average_trade_duration, in_long, in_short, in_out_of_market, win_rate)
 
