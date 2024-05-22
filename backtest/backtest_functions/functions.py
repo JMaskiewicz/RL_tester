@@ -278,20 +278,20 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     return metrics
 
 
-def calculate_profitable_trades(df, strategy_column, balance_column):
+def calculate_profitable_trades(df, strategy_column, balance_column, initial_capital=10000):
     trades = []
-    position = None
-    entry_balance = None
+    position = df[strategy_column].iloc[0]
+    entry_balance = initial_capital
 
-    for i in range(len(df)):
+    for i in range(1, len(df)):
         current_position = df[strategy_column].iloc[i]
-        if current_position != position:
-            if position is not None and position != 'Neutral':
-                exit_balance = df[balance_column].iloc[i]
+        previous_position = df[strategy_column].iloc[i - 1]
+        if current_position != previous_position:
+            if previous_position != 'Neutral':
+                exit_balance = df[balance_column].iloc[i - 1]
                 trades.append((exit_balance - entry_balance) > 0)
             if current_position != 'Neutral':
-                entry_balance = df[balance_column].iloc[i]
-            position = current_position
+                entry_balance = df[balance_column].iloc[i - 1]
 
     if position is not None and position != 'Neutral':
         exit_balance = df[balance_column].iloc[-1]
