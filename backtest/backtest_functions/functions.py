@@ -49,7 +49,7 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
             result = future.result()
             balance, total_reward, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, \
             sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
-            average_trade_duration, in_long, in_short, in_out_of_market = result
+            average_trade_duration, in_long, in_short, in_out_of_market, win_rate = result
 
             # Update result_data with all required metrics
             result_data = {
@@ -69,6 +69,7 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
                 'In Long': in_long,
                 'In Short': in_short,
                 'In Out of the Market': in_out_of_market,
+                'Win Rate': win_rate,
             }
 
             key = (agent.generation, label)
@@ -203,9 +204,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
 
     win_rate = profitable_trades / number_of_trades if number_of_trades > 0 else 0
 
-    return (env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown,
-            sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration,
-            average_trade_duration, in_long, in_short, in_out_of_market, profitable_trades, win_rate)
+    return (env.balance, env.reward_sum, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, #7
+            sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration, #7
+            average_trade_duration, in_long, in_short, in_out_of_market, win_rate)
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """
