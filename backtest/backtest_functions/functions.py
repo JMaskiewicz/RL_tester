@@ -278,7 +278,7 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     return metrics
 
 
-def calculate_profitable_trades(df, strategy_column, balance_column, initial_capital):
+def calculate_profitable_trades(df, strategy_column, balance_column, initial_capital=10000):
     # Append a row with the initial balance at the beginning of the dataframe
     initial_row = pd.DataFrame({balance_column: [initial_capital], strategy_column: [None]})
     df = pd.concat([initial_row, df], ignore_index=True)
