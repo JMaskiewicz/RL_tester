@@ -278,30 +278,66 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
     return metrics
 
 
-def calculate_profitable_trades(df, strategy_column, balance_column, initial_capital=10000):
-    trades = []
-    position = df[strategy_column].iloc[0]
-    entry_balance = initial_capital
+def calculate_profitable_trades(df, strategy_column, balance_column, initial_capital):
+    # Append a row with the initial balance at the beginning of the dataframe
+    initial_row = pd.DataFrame({balance_column: [initial_capital], strategy_column: [None]})
+    df = pd.concat([initial_row, df], ignore_index=True)
 
-    for i in range(1, len(df)):
-        current_position = df[strategy_column].iloc[i]
-        previous_position = df[strategy_column].iloc[i - 1]
-        if current_position != previous_position:
-            if previous_position != 'Neutral':
-                exit_balance = df[balance_column].iloc[i - 1]
-                trades.append((exit_balance - entry_balance) > 0)
-            if current_position != 'Neutral':
-                entry_balance = df[balance_column].iloc[i - 1]
+    # Filter out rows where strategy is 'Neutral'
+    filtered_df = df[df[strategy_column] != 'Neutral']
 
-    if position is not None and position != 'Neutral':
-        exit_balance = df[balance_column].iloc[-1]
-        trades.append((exit_balance - entry_balance) > 0)
+    # Drop consecutive duplicates in the strategy column
+    filtered_df = filtered_df.loc[(filtered_df[strategy_column] != filtered_df[strategy_column].shift())]
 
-    profitable_trades = sum(trades)
+    # Calculate profitable trades where the balance has increased from the last trade
+    profitable_trades = (filtered_df[balance_column].diff() > 0).sum()
+
     return profitable_trades
 
 
+def test_calculate_profitable_trades():
+    # Test case 1: No trades
+    df1 = pd.DataFrame({
+        'balance_column': [10000, 10000, 10000],
+        'strategy_column': ['Neutral', 'Neutral', 'Neutral']
+    })
+    initial_capital1 = 10000
+    result1 = calculate_profitable_trades(df1, 'strategy_column', 'balance_column', initial_capital1)
+    assert result1 == 0, f"Expected 0, but got {result1}"
+
+    # Test case 3: BALANCE
+    df3 = pd.DataFrame({
+        'balance_column': [10000, 10100, 10100, 10300, 10400, 10500],
+        'strategy_column': ['Short', 'Long', 'Neutral', 'Short', 'Long', 'Long']
+    })
+    initial_capital3 = 10000
+    result3 = calculate_profitable_trades(df3, 'strategy_column', 'balance_column', initial_capital3)
+    assert result3 == 3, f"Expected 3, but got {result3}"
+
+    # Test case 4: BALANCE
+    df4 = pd.DataFrame({
+        'balance_column': [10000, 9900, 9900, 9700, 9600, 9500],
+        'strategy_column': ['Neutral', 'Long', 'Neutral', 'Short', 'Neutral', 'Long']
+    })
+    initial_capital4 = 10000
+    result4 = calculate_profitable_trades(df4, 'strategy_column', 'balance_column', initial_capital4)
+    assert result4 == 0, f"Expected 0, but got {result4}"
+
+    # Test case 5: BALANCE
+    df5 = pd.DataFrame({
+        'balance_column': [11000, 11000, 10050, 10150, 10000],
+        'strategy_column': ['Long', 'Neutral', 'Short', 'Short', 'Long']
+    })
+    initial_capital5 = 10000
+    result5 = calculate_profitable_trades(df5, 'strategy_column', 'balance_column', initial_capital5)
+    assert result5 == 1, f"Expected 1, but got {result5}"
+
+    print("All tests passed!")
+
+
 if __name__ == '__main__':
+    test_calculate_profitable_trades()
+
     # test average trade duration
     actions = pd.Series(['Long', 'Short'] * 5)
 
