@@ -133,7 +133,6 @@ class Trading_Environment_Basic(gym.Env):
         if self.done:
             # close the open position
             if (1 - self.provision) * self.current_position * (self.current_price - self.open_price) > 0:
-                print('profitable trade')
                 self.profitable_trades += 1
 
         return self._next_observation(), final_reward, self.done, {}
