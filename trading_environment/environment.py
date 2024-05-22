@@ -16,7 +16,7 @@ class Trading_Environment_Basic(gym.Env):
         self.initial_balance = initial_balance  # Initial balance
         self.capital_investment = 0
         self.open_price = 1
-        self.current_position = 0
+        self.current_price = 0
 
         self.reward_sum = 0  # Initialize the reward sum
         self.current_position = 0  # This is a static part of the state
