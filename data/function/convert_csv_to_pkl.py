@@ -18,10 +18,13 @@ def convert_xlsx_to_pkl(asset_dir_path):
             df.to_pickle(pickle_path)
             print(f"Converted {filename} to Pickle format.")
 
-# Loop through each asset directory in data_sets
-for asset_dir in os.listdir(data_sets_path):
-    asset_dir_path = os.path.join(data_sets_path, asset_dir)
-    if os.path.isdir(asset_dir_path):
-        # Convert all XLSX files in this directory to Pickle
-        convert_xlsx_to_pkl(asset_dir_path)
-        print(f"Processed asset directory: {asset_dir}")
+if __name__ == '__main__':
+    specific_subfolders = ['BTCUSD']
+    # Loop through each asset directory in data_sets
+    for asset_dir in os.listdir(data_sets_path):
+        if asset_dir in specific_subfolders:
+            asset_dir_path = os.path.join(data_sets_path, asset_dir)
+            if os.path.isdir(asset_dir_path):
+                # Convert all XLSX files in this directory to Pickle
+                convert_xlsx_to_pkl(asset_dir_path)
+                print(f"Processed asset directory: {asset_dir}")

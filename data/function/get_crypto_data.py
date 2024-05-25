@@ -32,6 +32,7 @@ def fetch_crypto_data(api_key, fsym, tsym, from_time, days_span=1500):
 
     return pd.DataFrame(data)
 
+
 def save_yearly_data(data, asset_name):
     if data.empty:
         print(f"No data available for {asset_name}.")
@@ -39,23 +40,27 @@ def save_yearly_data(data, asset_name):
 
     data.drop_duplicates(subset='time', keep='first', inplace=True)  # Remove duplicates
     data['time'] = pd.to_datetime(data['time'], unit='s')
-    data.set_index('time', inplace=True)
-    base_dir = os.path.join('data', 'data_sets', f'{asset_name}USD')
+    data['date'] = data['time']
+    data.set_index('date', inplace=True)
+    data = data[['time', 'open', 'high', 'low', 'close', 'volumeto']]
+
+    # Adjust the base directory to go one level up before entering 'data/data_sets'
+    base_dir = os.path.join('..', 'data_sets', f'{asset_name}USD')
 
     if not os.path.exists(base_dir):
         os.makedirs(base_dir)
 
     for year in data.index.year.unique():
         yearly_data = data[data.index.year == year]
-        file_name = f'DAT_XLSX_{asset_name}_M1_{year}.xlsx'
+        file_name = f'DAT_XLSX_{asset_name}_D1_{year}.xlsx'
         full_path = os.path.join(base_dir, file_name)
         yearly_data.to_excel(full_path, header=False, index=False)
 
-# Example usage
+    # Example usage
 api_key = '2b1a99ecceac624ae9b41503e1000d4cea752f1141cd9f7db108c833a091dccd'
 fsym_list = ['BTC', 'ETH']
 tsym = 'USD'
-start_time = datetime(2019, 1, 1)
+start_time = datetime(2013, 1, 1)
 end_time = datetime.now()
 
 for fsym in fsym_list:
@@ -69,4 +74,4 @@ for fsym in fsym_list:
         current_time += timedelta(days=1500)  # increment by 1500 days
 
     all_data = all_data.drop_duplicates(subset='time', keep='first')  # Remove any duplicates
-    #save_yearly_data(all_data, fsym)
+    save_yearly_data(all_data, fsym)

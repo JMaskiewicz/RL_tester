@@ -149,7 +149,7 @@ def process_ticker_xlsx(ticker, timestamp_x, agg_dict, project_root):
     return df_all
 
 
-def load_data_parallel(tickers, timestamp_x):
+def load_data_parallel(tickers, timestamp_x, timestamp_y='M1'):
     start_time = time.time()
     agg_dict = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -158,7 +158,7 @@ def load_data_parallel(tickers, timestamp_x):
     dfs_all = []
     with ProcessPoolExecutor() as executor:
         # Submit all tasks to the executor
-        future_to_ticker = {executor.submit(process_ticker_pkl, ticker, timestamp_x, agg_dict, project_root): ticker for ticker in tickers}
+        future_to_ticker = {executor.submit(process_ticker_pkl, ticker, timestamp_x, timestamp_y, agg_dict, project_root): ticker for ticker in tickers}
 
         # Process as they complete
         for future in tqdm(as_completed(future_to_ticker), total=len(tickers), desc='Processing tickers'):
@@ -180,7 +180,7 @@ def load_data_parallel(tickers, timestamp_x):
         return pd.DataFrame()
 
 # TODO check parquet
-def process_ticker_pkl(ticker, timestamp_x, agg_dict, project_root):
+def process_ticker_pkl(ticker, timestamp_x, timestamp_y, agg_dict, project_root):
     dfs = []
     ticker_folder = os.path.join(project_root, 'data_sets', ticker)
 
