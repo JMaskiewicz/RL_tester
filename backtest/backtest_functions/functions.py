@@ -49,7 +49,8 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
             result = future.result()
             balance, total_reward, number_of_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, \
             sortino_ratio, calmar_ratio, cumulative_returns, balances, provision_sum, max_drawdown_duration, \
-            average_trade_duration, in_long, in_short, in_out_of_market, win_rate = result
+            average_trade_duration, in_long, in_short, in_out_of_market, win_rate, annualised_returns, \
+            annualised_std = result
 
             # Update result_data with all required metrics
             result_data = {
@@ -70,6 +71,8 @@ def run_backtesting(agent, agent_type, datasets, labels, backtest_wrapper, curre
                 'In Short': in_short,
                 'In Out of the Market': in_out_of_market,
                 'Win Rate': win_rate,
+                'Average Yearly Return': annualised_returns,
+                'Average Yearly std': annualised_std,
             }
 
             key = (agent.generation, label)
@@ -150,6 +153,7 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
         annualization_factor) if negative_volatility > 1e-6 else float('nan')
 
     annual_return = cumulative_returns.iloc[-1] ** ((annualization_factor) / len(returns)) - 1
+    annual_std = returns.std() * np.sqrt(annualization_factor)
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
     # Convert the list of action probabilities to a DataFrame
@@ -175,9 +179,9 @@ def generate_predictions_and_backtest(agent_type, df, agent, mkf, look_back, var
 
     win_rate = env.profitable_trades / env.num_trades if env.num_trades > 0 else 0
 
-    return (env.balance, env.reward_sum, env.num_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown, #7
-            sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration, #7
-            average_trade_duration, in_long, in_short, in_out_of_market, win_rate)
+    return (env.balance, env.reward_sum, env.num_trades, probabilities_df, action_df, sharpe_ratio, max_drawdown,  # 7
+            sortino_ratio, calmar_ratio, cumulative_returns, balances, env.provision_sum, max_drawdown_duration,  # 7
+            average_trade_duration, in_long, in_short, in_out_of_market, win_rate, annual_return, annual_std)  # 5
 
 def backtest_wrapper(agent_type, df, agent, mkf, look_back, variables, provision, initial_balance, leverage, Trading_Environment_Basic=None, reward_function=None):
     """
@@ -274,6 +278,8 @@ def generate_result_statistics(df, strategy_column, balance_column, provision_su
         'In short': in_short / len(df),
         'In out of the market': out_of_market / len(df),
         'Win Rate': win_rate,
+        'Annual Return': annual_return,
+        'Annual Std': returns.std() * np.sqrt(annualization_factor),
     }
     return metrics
 

@@ -123,7 +123,7 @@ if __name__ == '__main__':
     np.random.seed(0)
     random.seed(0)
 
-    tradable_markets = 'EURUSD'
+    tradable_markets = 'EURJPY'
     starting_balance = 10000
     look_back = 1
     provision = 0.0001
@@ -137,7 +137,7 @@ if __name__ == '__main__':
 
     start_date = '2005-01-01'  # worth to keep 2008 as it was a financial crisis
     validation_date = '2017-12-31'
-    test_date = '2019-01-01'
+    test_date = '2018-12-31'
 
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
                                                                                    test_date:'2025-01-01']
@@ -145,7 +145,7 @@ if __name__ == '__main__':
     #df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
     variables = [
-        {"variable": ("Close", "EURUSD"), "edit": "standardize"},
+        {"variable": ("Close", tradable_markets), "edit": "standardize"},
     ]
 
     buy_and_hold_agent = Buy_and_hold_Agent()
@@ -187,8 +187,8 @@ if __name__ == '__main__':
     print("Perfect Hold Agent final results:", ph_results_prepared[('PH', 'Final Balance')][0])
     print("Benchmark Perfect Hold Agent final reward:", ph_results_prepared[('PH', 'Total Reward')][0])
 
-    first_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[look_back]
-    last_close = df_test.loc[:, ('Close', 'EURUSD')].iloc[-1]
+    first_close = df_test.loc[:, ('Close', tradable_markets)].iloc[look_back]
+    last_close = df_test.loc[:, ('Close', tradable_markets)].iloc[-1]
     return_percentage = ((last_close - first_close) / first_close) * 100
 
     # Calculate the final investment value
