@@ -121,6 +121,11 @@ class Trading_Environment_Basic(gym.Env):
         # Update the balance
         self.balance += market_return * self.capital_investment * self.leverage + provision_cost
 
+        if self.balance < 0:  # TODO check how to handle negative balance
+            self.balance = 0
+            self.capital_investment = 0
+            print('Negative balance')
+
         # reward calculation with reward function on the top of the file (reward_calculation)
         final_reward = self.reward_function(self.current_price, next_price, self.current_position, action, self.leverage, self.provision)
         self.reward_sum += final_reward  # Update the reward sum

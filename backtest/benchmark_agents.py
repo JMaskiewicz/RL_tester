@@ -123,7 +123,7 @@ if __name__ == '__main__':
     np.random.seed(0)
     random.seed(0)
 
-    tradable_markets = 'EURJPY'
+    tradable_markets = 'USDJPY'
     starting_balance = 10000
     look_back = 1
     provision = 0.0001
@@ -140,7 +140,7 @@ if __name__ == '__main__':
     test_date = '2018-12-31'
 
     df_train, df_validation, df_test = df[start_date:validation_date], df[validation_date:test_date], df[
-                                                                                   test_date:'2025-01-01']
+                                                                                   test_date:'2024-01-01']
     #df_validation = pd.concat([df_train.iloc[-look_back:], df_validation])
     #df_test = pd.concat([df_validation.iloc[-look_back:], df_test])
 
