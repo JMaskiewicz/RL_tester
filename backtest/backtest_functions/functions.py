@@ -254,19 +254,23 @@ def generate_result_statistics(df, strategy_column=None, balance_column=None, pr
     # Calculate Calmar Ratio
     calmar_ratio = annual_return / abs(max_drawdown) if abs(max_drawdown) > 1e-6 else float('nan')
 
-    # Calculate Number of Trades and Average Duration
-    num_trades, avg_duration = calculate_number_of_trades_and_duration(df[strategy_column])
-
-    # calculate profitable trades
-    profitable_trades = calculate_profitable_trades(df, strategy_column, balance_column)
-    win_rate = profitable_trades / num_trades if num_trades > 0 else float('nan')
-
     # Calculate the number of times the agent was in long, short, or out of the market
     if strategy_column is None:
         in_long = 0
         in_short = 0
         out_of_market = 0
+        num_trades = 0
+        avg_duration = 0
+        win_rate = 0
+
     else:
+        # Calculate Number of Trades and Average Duration
+        num_trades, avg_duration = calculate_number_of_trades_and_duration(df[strategy_column])
+
+        # calculate profitable trades
+        profitable_trades = calculate_profitable_trades(df, strategy_column, balance_column)
+        win_rate = profitable_trades / num_trades if num_trades > 0 else float('nan')
+
         in_long = df[df[strategy_column] == 'Long'].shape[0]
         in_short = df[df[strategy_column] == 'Short'].shape[0]
         out_of_market = df[df[strategy_column] == 'Neutral'].shape[0]
