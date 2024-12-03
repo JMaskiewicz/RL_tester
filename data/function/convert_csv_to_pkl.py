@@ -19,7 +19,7 @@ def convert_xlsx_to_pkl(asset_dir_path):
             print(f"Converted {filename} to Pickle format.")
 
 if __name__ == '__main__':
-    specific_subfolders = ['BTCUSD']
+    specific_subfolders = ['SPXUSD']
     # Loop through each asset directory in data_sets
     for asset_dir in os.listdir(data_sets_path):
         if asset_dir in specific_subfolders:
